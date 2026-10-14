@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CI coverage for the report-embedding scripts** (`tests/ci/run-embed-check.sh`). The rest of
+  the suite drives the pipeline with `-stub-run`, and in stub mode MULTIQC's `stub:` block
+  replaces the real script body — so `memote_html_section.py` and `quast_html_section.py` were
+  **never executed** by any check. The new script calls both directly against tiny fixtures
+  (needs no conda, no Nextflow, no network; 0.3 s, 47 assertions) and pins: the section header
+  each emits (MultiQC *silently ignores* a malformed one), one aggregate file for QUAST vs one
+  file per sample for MEMOTE (D15), a byte-identical `srcdoc` round-trip for every embedded page
+  (fixtures deliberately full of `&`, `<`, `>`, `"`, `'`), no `<base href="/">`/`<style>`/
+  `<script>` leaking from an embedded page into the outer document, a missing cohort member
+  being a warning rather than a crash, no file at all when nothing can be embedded, and
+  `quast_full` still sorting between `quast` and `busco`. Mutation-tested rather than assumed:
+  unescaping the `srcdoc`, renaming the anchor, dropping the header comment and inserting an
+  extra anchor between `quast` and `busco` each make it exit non-zero with 4 / 13 / 2 / 1
+  failing assertions.
 - **QUAST's own output files are merged into the MultiQC report.** `report.tsv` was already
   consumed (built-in `quast` table + `quast_generalstats`), so the new
   `scripts/quast_html_section.py` adds the other two: the complete interactive `report.html`

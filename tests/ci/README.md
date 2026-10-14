@@ -7,6 +7,7 @@ drift apart.
 
 ```bash
 export PATH="/path/to/nextflow/bin:$PATH"     # Nextflow >= 25.10
+bash tests/ci/run-embed-check.sh              # needs python3 only, no Nextflow
 bash tests/ci/run-lint.sh
 bash tests/ci/run-preview.sh
 bash tests/ci/run-disk-guard.sh
@@ -21,6 +22,7 @@ assertion. They are independent and can be run in any order.
 
 | Script | Proves |
 |---|---|
+| `run-embed-check.sh` | The two report-embedder scripts **actually run** — they never do under `-stub-run`, because MULTIQC's `stub:` block replaces the real script body. Asserts the section header each emits (`id` / `section_name` / `plot_type`; MultiQC silently ignores a malformed one), that QUAST yields **one aggregate** file for the cohort while MEMOTE yields **one file per sample** (D15), that every `<iframe srcdoc>` parses back **byte-identical** to its source page (fixtures deliberately full of `&`, `<`, `>`, `"`, `'`), that an embedded page's `<base href="/">`, `<style>` and `<script>` never reach the outer document, that a cohort member with no report is a warning rather than a crash — and that the file with no inputs is not written at all. Also pins the ordering contract: `quast_full` sorts between `quast` and `busco` in the overlay, with nothing else squeezed in. Needs no conda, no Nextflow and no network. |
 | `run-lint.sh` | `nextflow lint main.nf nextflow.config` reports **no errors**, and the warning count does not exceed the pinned baseline (a ratchet, so lint debt cannot grow unnoticed). |
 | `run-preview.sh` | `-preview` compiles `main.nf` and runs the workflow body without executing a task; and six malformed sample sheets (missing column, bad name, duplicate name, wrong field count, missing FASTQ, missing file) each abort **before a single task is submitted**. The bad sheets are run with `-stub-run`, not `-preview`, precisely so a task *would* be submitted if validation failed to fire. |
 | `run-disk-guard.sh` | The F20 disk pre-flight passes at a low floor, **aborts before any task** with a message naming the shortfall and the cleanup commands when the floor is unmet, and is fully skipped with `--min_free_disk_gb=0`. |
@@ -34,16 +36,25 @@ assertion. They are independent and can be run in any order.
 | `ci.config` | Nextflow config overlay for every check: redirects all output/log/benchmark dirs and `workDir` under `tests/ci/out/`, and disables conda. Nothing a check does can touch validated data. |
 | `inject-sample-failure.config` | Fails `FASTQC_RAW` for one sample (`CI_FAIL_SAMPLE`, default `CI_B`) through `beforeScript`, so `main.nf` carries no test hook. |
 | `ignore-strategy.config` | Negative control for the rejected `errorStrategy = 'ignore'`. |
-| `fixtures/` | Two-sample sheet with tiny synthetic gzipped FASTQ reads and a `bakta_db/version.json` sentinel. |
+| `fixtures/` | Two-sample sheet with tiny synthetic gzipped FASTQ reads and a `bakta_db/version.json` sentinel; plus `quast/` and `memote/` — minimal stand-ins for a QUAST `report.html`/`report.txt` and a MEMOTE `index.html` (including its `<base href="/">`), each seeded with the characters that break naive escaping. |
 | `lib.sh` | Shared assertion helpers and the `nextflow` wrapper (`NXF_HOME` stays inside the project, ANSI-free logs make the greps stable). |
 | `out/` | Scratch space; git-ignored, safe to delete at any time. |
 
 ## Notes
 
-- **No conda environment is built** and no tool is executed: all checks use `-stub-run`
-  (every process has a `stub:` block). Measured on the development machine: `run-lint.sh` 2 s,
-  `run-stub-smoke.sh` 8 s, `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s,
-  `run-preview.sh` 33 s.
+- **No conda environment is built** and no tool is executed: all Nextflow checks use `-stub-run`
+  (every process has a `stub:` block). Measured on the development machine: `run-embed-check.sh`
+  0.3 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s, `run-disk-guard.sh` 16 s,
+  `run-failure-isolation.sh` 27 s, `run-preview.sh` 33 s.
+- `run-embed-check.sh` needs no Nextflow at all: it calls `scripts/memote_html_section.py` and
+  `scripts/quast_html_section.py` directly with `python3` (standard library only), which is why
+  it is the first step of the smoke job. It exists because the stub path means those two scripts
+  are **never executed** by any other check: a regression in them would not fail CI, it would
+  just be missing from a 16 MB report.
+- That check was mutation-tested rather than assumed to work: unescaping the `srcdoc`, renaming
+  the section anchor, dropping the section header comment, and inserting an extra anchor between
+  `quast` and `busco` each make it exit non-zero (with 4, 13, 2 and 1 failing assertions
+  respectively), and the unmutated tree passes all 47.
 - The failure injection is delivered through a config-level `beforeScript`, which is
   emitted verbatim into the task wrapper. A config directive is resolved long before a
   process input such as `sample` exists, so it cannot interpolate that input; the injector

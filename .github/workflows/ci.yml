@@ -7,9 +7,10 @@
 #
 # No conda environment is built and no real tool is executed: the smoke checks
 # use `-stub-run` with conda disabled (tests/ci/ci.config), because all ten
-# processes carry a `stub:` block. The whole job set finishes in about a
-# minute per job. The full 10-step run against real data stays a manual, documented
-# acceptance test (docs/nextflow-port-design.md §14).
+# processes carry a `stub:` block, and the embedding check runs the two
+# report-embedder scripts directly (no Nextflow at all). The whole job set
+# finishes in about a minute per job. The full 10-step run against real data
+# stays a manual, documented acceptance test (docs/nextflow-port-design.md §14).
 # ============================================================
 
 name: CI
@@ -57,6 +58,8 @@ jobs:
         with:
           version: ${{ env.NEXTFLOW_VERSION }}
           java-version: '21'
+      - name: Embedding scripts (MEMOTE / QUAST sections -- no conda, no Nextflow)
+        run: bash tests/ci/run-embed-check.sh
       - name: Sample-sheet validation (preview + injected bad sheets)
         run: bash tests/ci/run-preview.sh
       - name: Disk pre-flight guard (F20)

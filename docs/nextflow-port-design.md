@@ -992,6 +992,7 @@ profiles {
   故"逐样本一个 QUAST 内嵌段"（照抄 MEMOTE 的写法）**无法**排到 QUAST 表旁：锚点是 `<样本名>` 无法预知、也无法写进静态覆盖层。改为**全队列只出一个** `quast_full_mqc.html`（固定锚点 `quast_full`，覆盖层给 `order: 850`），内部按样本分块（标题 + 独立产物相对链接 + `report.txt` 折叠块 + `report.html` 的 iframe）。
   - **iframe 自适应高度**：`srcdoc` 帧与父页同源，故 `onload` 里用 `contentDocument.documentElement.scrollHeight` 把帧高调成内容高度（避免嵌套滚动条），并用 `try{…}catch(e){}` 包住 + 固定 1400 px 兜底——若某浏览器把 `file://` 下的 srcdoc 帧当作不透明源，只会退化成固定高度，不会让报告报错。
   - **验收（2026-10-14）**：报告 `iframe srcdoc` 由 2 增至 **4**（2 MEMOTE + 2 QUAST），且用 `html.parser` 解析后逐个比对——**4 个 srcdoc 全部与源文件逐字节相同**（属性值由解析器反转义，故直接等值比较即证明转义无损）；章节顺序 `fastqc(1000) < quast(900) < quast_full(850) < busco(800) < carveme_summary(700) < memote_summary(600) < memote_full_*(默认) < pipeline_runtime(-100) < multiqc_software_versions(-200)`；报告 15.24 MB → **16.12 MB**（+873,573 B，与嵌入载荷 872,684 B 相符）；MultiQC DOM 中 `<base href="/">` 计数仍为 0（未污染）；两样本 `report.txt` 内容均在报告中可按原文检索。
+  - **该内嵌能力现有 CI 守卫（2026-10-14）**：`tests/ci/run-embed-check.sh` 用 fixtures **直跑**两个内嵌脚本（既不建 conda 也不经 Nextflow，0.3 秒 / 47 条断言），断言章节头（`id`/`section_name`/`plot_type`——MultiQC 对畸形头是**静默忽略**，写成错的只会少一个章节、不会报错）、每样本 `srcdoc` 与源文件**逐字节往返**（fixtures 刻意塞满 `&` `<` `>` `"` `'`）、内嵌页的 `<base href="/">`/`<style>`/`<script>` 绝不外泄到外层文档、QUAST 单文件 vs MEMOTE 逐样本（D15）、缺失样本只告警不崩、以及覆盖层里 `quast_full` 落在 `quast` 与 `busco` 之间。它之所以必要：其余检查全走 `-stub-run`，而 stub 模式下 MULTIQC 的 `stub:` 块**替换**真实脚本体，这两个内嵌脚本在任何其他检查里都**从未被执行**过。该检查本身也做了变异验证（去转义 / 改锚点 / 删注释头 / 插锚点分别触发 4 / 13 / 2 / 1 条断言失败并非零退出），不是"看着像能过"。
   - 报告由**与 MULTIQC process 完全一致的命令**在仓库外重放生成后发布（同 §12.1 F19/F20 的既有做法）。原因：上一轮 `-resume` 会话缓存只含部分任务（磁盘 99%、仅 8.3 GiB 可用，低于 F22 的 20 GiB 闸门，需显式 `--min_free_disk_gb`；且被杀死的探查运行把任务写进了另一个会话的缓存，`.nextflow/history` 里最后一条指向的会话没有完整 23 任务），不存在只重跑 MULTIQC 的 `-resume` 路径。改跑 `tests/ci/run-lint.sh`（0 error / 38 warning = 告警棘轮未涨）与 `tests/ci/run-stub-smoke.sh`（23 任务 DAG + 产物契约 + 根产物零改写）验证 `main.nf` 改动。
 
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
@@ -1009,7 +1010,8 @@ nextflow run . -preview                 # 不执行任务；26.x 不再渲染命
 nextflow run . -stub                    # 真干跑（各 process 均有 stub: 块）；⚠️ 会以空文件覆盖已 publish 的真实产物（F18），仅限产物目录为空时使用
 nextflow run . -with-report -with-trace # 执行报告 + 资源/耗时 trace
 
-# 零成本自动检查（不建 conda 环境、不跑任何真实工具；实测单脚本 2–35 秒；CI 调用的就是这些脚本）
+# 零成本自动检查（不建 conda 环境、不跑任何真实工具；实测单脚本 0.3–35 秒；CI 调用的就是这些脚本）
+bash tests/ci/run-embed-check.sh        # F21/F24 内嵌脚本：章节头 + 转义往返 + 排序锚点（无需 Nextflow）
 bash tests/ci/run-lint.sh               # nextflow lint：0 error + 告警数棘轮
 bash tests/ci/run-preview.sh            # -preview 编译 + 6 个坏样本表必须在任何任务前失败
 bash tests/ci/run-disk-guard.sh         # F22 磁盘预检三分支
@@ -1056,7 +1058,7 @@ nextflow run . -resume
 
 ### 阶段 D：每次 push 的自动化守卫（2026-10-14 起，`.github/workflows/ci.yml`）
 CI 只安装 Nextflow，然后调用 `tests/ci/run-*.sh`——**本地跑与 CI 跑是同一批断言**，不会漂移。
-lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 10 步 stub 干跑（23 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照。
+lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 10 步 stub 干跑（23 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照、F21/F24 内嵌脚本直跑（章节头 + 转义往返 + 排序锚点；不需要 Nextflow，0.3 秒）。
 **不建 conda 环境、不跑真实工具**：实测 `run-lint` 2s / `run-stub-smoke` 8s / `run-disk-guard` 16s / `run-failure-isolation` 27s / `run-preview` 33s，三个 job 各自约 1 分钟内；真实数据的 10 步验收（阶段 B）仍是人工流程。
 
 ## 15. 风险登记表

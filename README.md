@@ -80,9 +80,11 @@ row-specific message.
 ### Verify without running the pipeline
 
 The repository ships a tool-free check suite — no conda environment is built and no tool is
-executed, because the ten processes run from their `stub:` blocks:
+executed (the ten processes run from their `stub:` blocks, and the embedding check calls the
+two helper scripts directly):
 
 ```bash
+bash tests/ci/run-embed-check.sh           # MEMOTE / QUAST section scripts (no Nextflow needed)
 bash tests/ci/run-lint.sh                  # nextflow lint (errors + warning ratchet)
 bash tests/ci/run-preview.sh               # compile + sample-sheet validation, good and bad
 bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
@@ -210,7 +212,8 @@ scripts/                    helper scripts (byte-identical) + memote_html_sectio
                             quast_html_section.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
 docs/                       design document, asset provenance, audit notes
-tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard, failure isolation)
+tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard,
+                            failure isolation, report-embedding scripts)
 .github/workflows/ci.yml    runs tests/ci/ on every push and pull request
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
 ```

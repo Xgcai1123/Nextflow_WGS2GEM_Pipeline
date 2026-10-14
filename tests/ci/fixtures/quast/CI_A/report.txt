@@ -1,0 +1,7 @@
+Assembly statistics for CI_A
+# contigs (>= 0 bp)          3
+# contigs (>= 1000 bp)       2
+N50                        1200
+L50                           2
+Total length (>= 0 bp)     3400
+GC (%)                     50.75
