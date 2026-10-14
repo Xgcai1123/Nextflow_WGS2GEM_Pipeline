@@ -46,7 +46,7 @@ FastQC → Trimmomatic → FastQC → SPAdes → QUAST → BUSCO → Bakta → C
 
 ```
 WGSpipeline-nextflow/
-├── main.nf                     # DSL2：解析期校验 + 10 个 process + workflow + onComplete
+├── main.nf                     # DSL2：解析期校验 + 11 个 process（10 步 + F26 生长验证）+ workflow + onComplete
 ├── nextflow.config             # params / process / conda / profiles / workDir
 ├── samples.tsv                 # 队列样本表（自有一份，初始内容与原仓库一致）
 ├── multiqc_config.yaml         # 复用副本（字节一致）
@@ -661,7 +661,7 @@ process MEMOTE {
 |---|---|
 | conda | `envs/fastqc.yaml`（含 multiqc 1.21） |
 | cpus | 1 |
-| 输入 | `val report_name`（F19：运行时算出的报告名走 channel，不用运行时 params 变更）+ `val samples`（SAMPLE_NAMES 列表）+ `val upstream`（收集触发，保证上游完成）+ `path multiqc_config`（原样复用）+ `path multiqc_config_extra`（F21 排版覆盖层） |
+| 输入 | `val report_name`（F19：运行时算出的报告名走 channel，不用运行时 params 变更）+ `val samples`（SAMPLE_NAMES 列表）+ `val upstream`（收集触发，保证上游完成）+ `path multiqc_config`（原样复用）+ `path multiqc_config_extra`（F21 排版覆盖层）+ `path growth_section`（F26：生长验证表，它同时构成对 GROWTH_CHECK 的依赖） |
 | 输出 | `path("${report_name}.html")` → publish 到 `reports/multiqc/` |
 
 **报告排版（F21 + F24，用户要求）：**
@@ -1009,6 +1009,15 @@ profiles {
   - **边界（诚实声明）**：该检查证明的是**生理合理性，不是定量准确性**（后者需要实测生长数据）；且两个模型给出**相同**生长速率，因为 CarveMe 的模板生物质方程占主导——**该检查无法区分菌株**。
   - **CI 守卫**：`tests/ci/run-growth-check.sh` + 独立 job（唯一需要 `cobra` 的 job，`pip install cobra` 自带 GLPK/swiglpk）。真实模型是生成物、不在仓库里，故 CI 用**测试内生成的合成模型**（行为由构造保证）验证 checker 本身，并带三条负对照（介质组分无法映射 / 阈值不可能满足 / 越过物理上限）——每条都必须让脚本非零退出。
 
+- **F26 生长验证进管线、进报告（用户指出"multiqc 里好像没有这个信息"，2026-10-15）**：F25 的结论此前只在**手动**调用时产生，报告里没有它；而报告里唯一与模型质量相关的数字（MEMOTE 总分）又**不覆盖**生长测试（F25 发现其权重为 0）。于是新增 `GROWTH_CHECK` process（coda = `envs/memote.yaml`，含 cobra + 求解器）。实现与两个关键机制：
+  - **全队列一个任务**（不是每样本一个），与报告"一个章节、每样本一行"同形（cf. D15）。产出 `models/growth/growth_mqc.tsv`（自描述）+ `growth.tsv` + `logs/growth/growth_check.log`；MULTIQC 把它作为 **`path` 文件输入**（既传入命令行、又天然构成对 GROWTH_CHECK 的依赖，无需再塞进 `up_ok`）。
+  - **章节配置写在文件头**，由 MultiQC 的 `_find_file_header()` 解析：它把文件里**所有 `#` 开头的行**去掉 `#` 后拼接成 YAML。这是**被迫也是刻意**的选择——在覆盖层里声明需要 `sp:`，而第二个 `sp:` 会**替换**（非深合并）复用配置 `multiqc_config.yaml` 的 `sp:` 块，静默丢掉全部既有自定义内容章节（F21）。已用 **MultiQC 自己的解析器**验证该文件头：返回 dict，`id=growth_on_medium`、`plot_type=table`、`headers` 五列齐全、`pconfig.id=growth_on_medium_table`。
+  - **排序 550**：紧接 MEMOTE 表（600）之后、**在内嵌完整报告与耗时表之前**。理由：两张"摘要表"（MEMOTE、生长）保持管线顺序相邻，而 MEMOTE/QUAST 的完整内嵌文档（合计约 9 MB 的 iframe）作为附录排在后面；若把生长表排到那些内嵌文档之后，读者要先翻过两个巨型 iframe 才看得到它。（`memote_full_*` 走默认 order、无法静态排序——见 D15。）
+  - **`--report-only` 的语义（D17）**：窗口越界**只报告、不失败**（窗口是 *E. coli* 特定的，而 `--busco_lineage` 可换、样本可为非肠杆菌）；**介质与模型不匹配仍然 exit 2**（那是配置缺陷，不是生物学发现）。所以 66 h⁻¹ 这类泄漏会明确出现在报告表格里，而不会让整条 run 死掉。
+  - **不写 benchmark**：`benchmarks/` 承载 Snakemake 的步骤集合，`multiqc_extras.py` 用 `STEP_LABELS` 把它映射成带标签的列；新步骤没有标签，文件会以生名 `growth_check` 出现在耗时表里。
+  - **顺带抓到一个真实漏洞（检查套件立功）**：新 `publishDir` 未在 `tests/ci/ci.config` 中重定向，第一次 `-stub-run` 就把**空占位文件发布进了真实 `models/growth/`**——被 **F18 守卫当场抓出**（`run-stub-smoke.sh` 的 `find -newer` 断言报 "no repository output file modified" 失败）。已补 ci.config 重定向并删除两个 0 字节污染文件。这正是那道防线的价值。
+  - **验收（2026-10-15）**：DAG 24 任务（`run-stub-smoke` 全绿，产物契约含 `models/growth/{growth_mqc.tsv,growth.tsv}`）；`nextflow lint` **0 error / 34 warning**（低于 38 棘轮——新增代码零告警，并顺手把 4 处 `Channel.` 换成新 API `channel.`）；报告按 process 命令重放后新增 *Growth on defined medium* 章节，顺序为 `fastqc → quast → quast_full → busco → carveme_summary → memote_summary → growth_on_medium → memote_full_* → pipeline_runtime → versions`，表内含 5 列与两样本（0.953 / 66.000 / 0.000 / 0.228 / 0 失败）；4 个内嵌 iframe 往返仍**逐字节一致**、`<base href="/">` 计数仍为 0；报告 16.12 → **16.14 MB**。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1029,7 +1038,7 @@ bash tests/ci/run-embed-check.sh        # F21/F24 内嵌脚本：章节头 + 转
 bash tests/ci/run-lint.sh               # nextflow lint：0 error + 告警数棘轮
 bash tests/ci/run-preview.sh            # -preview 编译 + 6 个坏样本表必须在任何任务前失败
 bash tests/ci/run-disk-guard.sh         # F22 磁盘预检三分支
-bash tests/ci/run-stub-smoke.sh         # 全 10 步 -stub-run：23 任务 + 产物契约 + 不动根产物目录
+bash tests/ci/run-stub-smoke.sh         # 全 DAG -stub-run：24 任务 + 产物契约 + 不动根产物目录
 bash tests/ci/run-failure-isolation.sh  # F23 注入失败 + -resume 收敛 + ignore 负对照
 ```
 
@@ -1072,7 +1081,7 @@ nextflow run . -resume
 
 ### 阶段 D：每次 push 的自动化守卫（2026-10-14 起，`.github/workflows/ci.yml`）
 CI 只安装 Nextflow，然后调用 `tests/ci/run-*.sh`——**本地跑与 CI 跑是同一批断言**，不会漂移。
-lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 10 步 stub 干跑（23 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照、F21/F24 内嵌脚本直跑（章节头 + 转义往返 + 排序锚点；不需要 Nextflow，0.3 秒）。
+lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 DAG stub 干跑（24 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照、F21/F24 内嵌脚本直跑（章节头 + 转义往返 + 排序锚点；不需要 Nextflow，0.3 秒）、F25 生长检查直跑（合成模型 + 3 条负对照；只需 cobra，12 秒）。
 **不建 conda 环境、不跑真实工具**：实测 `run-lint` 2s / `run-stub-smoke` 8s / `run-disk-guard` 16s / `run-failure-isolation` 27s / `run-preview` 33s，三个 job 各自约 1 分钟内；真实数据的 10 步验收（阶段 B）仍是人工流程。
 
 ## 15. 风险登记表
@@ -1110,6 +1119,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D14 | 回归守卫用 `tests/ci/*.sh` 承载、GitHub Actions 只做"装 Nextflow + 调脚本"：本地与 CI 同一批断言；全部用 `-stub-run` + 禁用 conda，真实数据验收仍人工 | 已定（2026-10-14） |
 | D15 | 内嵌第三方工具自身报告（MEMOTE / QUAST）时，**每个工具一个固定锚点的章节**，不按样本拆章：`report_section_order` 锚点精确匹配、无法预知样本名，逐样本 id 会让章节落到管线顺序之外；代价是章节内按样本分块而非每样本一个折叠标题 | 已定（2026-10-14，F24） |
 | D16 | 生长验证**自建**而非委托上游：介质版本化为 `media/m9_aerobic.yaml`（组分取 CarveMe 自带 M9 行，不自行发明），断言由 `scripts/check_growth.py` 承担（组分可映射 / 落窗 [0.4,1.5] / 物理上限 2.81 / 无碳源为 0 / 厌氧更低）。理由：MEMOTE 0.17.0 的 `test_fast_growth_default` 断言极性反了、且该组测试进不了分数（F25），把物理上限委托给它等于没有守卫。**不**把该断言塞进 `main.nf` 做硬失败：窗口是 *E. coli* 特定的，而 BUSCO 谱系可换、样本可为非肠杆菌；管线的普适断言只有"不长于已知最快细菌"与"无碳源不长" | 已定（2026-10-15，F25） |
+| D17 | 生长验证**入管线**的具体形态：全队列**一个** `GROWTH_CHECK` 任务（与报告"一章节、每样本一行"同形，cf. D15）；章节配置写在 `*_mqc.tsv` 的**文件头**而非覆盖层（否则需要第二个 `sp:`，会替换掉复用配置的 sp 块，F21）；`--report-only` = 窗口越界只报告不失败，介质与模型不匹配仍 exit 2；**不写 benchmark**（会以生名 `growth_check` 出现在耗时表） | 已定（2026-10-15，F26） |
 
 ## 17. 里程碑与后续开放问题
 

@@ -35,7 +35,10 @@ status=$?
 expect_eq "stub run exits 0" "0" "${status}"
 
 submitted=$(grep -c 'Submitted process' "${log}" || true)
-expect_eq "task count (2 samples x 10 steps + MultiQC)" "23" "${submitted}"
+# 2 samples x (FastQC raw 1/2, Trimmomatic, FastQC trimmed 1/2, SPAdes, QUAST,
+# BUSCO, Bakta, CarveMe, MEMOTE) = 22, + GROWTH_CHECK (one aggregate task, F26)
+# + MULTIQC = 24.
+expect_eq "task count (2 samples x 11 steps + growth check + MultiQC)" "24" "${submitted}"
 
 if [ "${status}" -ne 0 ]; then
     echo "  ---- nextflow output ----"
@@ -70,6 +73,11 @@ for s in CI_A CI_B; do
     for f in index.html memote_result.json memote_summary.tsv; do
         expect_file "memote ${f} ${s}" "${CI_OUT}/models/memote/${s}/${f}"
     done
+done
+# F26: the growth check is ONE aggregate task (one section, a row per sample),
+# so its published artefacts are cohort-level, not per sample.
+for f in growth_mqc.tsv growth.tsv; do
+    expect_file "growth ${f}" "${CI_OUT}/models/growth/${f}"
 done
 expect_file "aggregate report" "${CI_OUT}/reports/multiqc/multiqc_report.html"
 

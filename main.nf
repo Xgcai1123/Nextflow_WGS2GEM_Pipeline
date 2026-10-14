@@ -326,6 +326,55 @@ process MEMOTE {
     """
 }
 
+process GROWTH_CHECK {
+    tag "cohort"
+    conda "${params.envs_dir}/memote.yaml"     // cobra + a solver live in this env
+    cpus 1
+    publishDir(path: { params.growth_dir }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:
+    path models              // collect(): every CarveMe model, so ONE task (F26/D17)
+    path medium              // media/m9_aerobic.yaml
+    path checker             // scripts/check_growth.py
+
+    output:
+    path("out/growth_mqc.tsv"), emit: mqc
+    path("out/growth.tsv"),     emit: tsv
+
+    script:
+    """
+    mkdir -p ${params.logs_dir}/growth out
+
+    # F26: assert physiological behaviour under a DECLARED medium. The CarveMe
+    # models ship with every exchange reaction open (a complete medium), under
+    # which FBA reports ~66 1/h -- an assembly-rate artefact, not a growth rate.
+    #
+    # --report-only is deliberate (D17): the plausibility window is E. coli
+    # specific and this pipeline can be pointed at other organisms
+    # (--busco_lineage), so a window violation is REPORTED -- it lands in the
+    # MultiQC section below and in the log -- instead of failing the run. A
+    # medium that does not match the model is still fatal (exit 2), because that
+    # is a configuration defect rather than a biological finding.
+    #
+    # No bench_start/bench_finish here: benchmarks/ carries the Snakemake step
+    # set that multiqc_extras.py maps to labelled runtime columns, and this step
+    # has no label there -- a file would surface as a raw "growth_check" column.
+    "\${CONDA_PREFIX}/bin/python3" ${checker} \\
+        --media ${medium} \\
+        --report-only \\
+        --mqc-out out/growth_mqc.tsv \\
+        --tsv-out out/growth.tsv \\
+        ${models} > ${params.logs_dir}/growth/growth_check.log 2>&1
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/growth_mqc.tsv out/growth.tsv
+    """
+}
+
 process MULTIQC {
     tag "${report_name}"
     conda "${params.envs_dir}/fastqc.yaml"
@@ -341,6 +390,8 @@ process MULTIQC {
     path multiqc_config
     path multiqc_config_extra    // presentation overlay: pipeline section order +
                                  // full MEMOTE / QUAST HTML embedding (F21/F24)
+    path growth_section          // F26: growth-on-defined-medium table (*_mqc.tsv
+                                 // is auto-discovered, so no `sp:` entry is needed)
 
     output:
     path("${report_name}.html")
@@ -407,7 +458,7 @@ process MULTIQC {
     done
 
     # -c twice: the reused config first, the presentation overlay second.
-    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html \\
+    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html ${growth_section} \\
         -c ${multiqc_config} \\
         -c ${multiqc_config_extra} \\
         -o . -f -n ${report_name} \\
@@ -440,6 +491,7 @@ workflow {
             'annotation (Bakta)' : params.annot_dir,
             'model (CarveMe)'    : params.carveme_dir,
             'model (MEMOTE)'     : params.memote_dir,
+            'growth check (F26)' : params.growth_dir,
             'reports (MultiQC)'  : params.multiqc_dir,
         ]
         def volumes = [:]            // filesystem -> [anchor path, usable bytes, total bytes]
@@ -558,9 +610,19 @@ workflow {
     CARVEME(BAKTA.out.map { n, gff3, faa, tsv, ffn, gbff, txt -> tuple(n, faa) })
     MEMOTE(CARVEME.out.map { n, xml, faa, tsv -> tuple(n, xml) })
 
+    // F26/D17: one aggregate task -- the report gets one section with a row per
+    // sample, so collecting the models here mirrors that shape (cf. D15).
+    // (`_`-prefixed lambda parameters are unused by design: only the SBML path is
+    // needed, and the lint ratchet must not grow.)
+    GROWTH_CHECK(
+        CARVEME.out.map { _n, xml, _faa, _tsv -> xml }.collect(),
+        channel.of(file(params.growth_medium)),
+        channel.of(file("${params.scripts_dir}/check_growth.py"))
+    )
+
     // dependency trigger: MULTIQC waits for all upstream steps (their outputs are
     // read from repo paths by multiqc_extras.py / the BUSCO staging loop).
-    up_ok = Channel.empty()
+    up_ok = channel.empty()
         .mix(FASTQC_RAW.out.map    { n, r, z, h -> z })
         .mix(FASTQC_TRIMMED.out.map{ n, r, z, h -> z })
         .mix(QUAST.out.map         { n, html, txt, tsv -> tsv })
@@ -571,10 +633,11 @@ workflow {
 
     MULTIQC(
         report_name,                           // val: report filename (no runtime params mutation)
-        Channel.value(SAMPLE_NAMES),          // cohort == the sheet, never a dir scan
+        channel.value(SAMPLE_NAMES),          // cohort == the sheet, never a dir scan
         up_ok,
-        Channel.of(file(params.multiqc_config)),
-        Channel.of(file(params.multiqc_config_extra))
+        channel.of(file(params.multiqc_config)),
+        channel.of(file(params.multiqc_config_extra)),
+        GROWTH_CHECK.out.mqc                   // F26: growth table, one section
     )
 
     onComplete:

@@ -13,7 +13,7 @@ bacterial isolate all the way from raw reads to a draft genome-scale metabolic m
 
 ```
 FastQC (raw) → Trimmomatic → FastQC (trimmed) → SPAdes
-             → { QUAST | BUSCO | Bakta } → CarveMe → MEMOTE → MultiQC
+             → { QUAST | BUSCO | Bakta } → CarveMe → MEMOTE → Growth check (M9) → MultiQC
 ```
 
 | # | Step | Tool | Purpose |
@@ -28,9 +28,12 @@ FastQC (raw) → Trimmomatic → FastQC (trimmed) → SPAdes
 | 8 | Model reconstruction | CarveMe 1.6.6 (SCIP) | draft GEM (SBML) |
 | 9 | Model evaluation | MEMOTE 0.17.0 | model quality score |
 | 10 | Aggregate report | MultiQC 1.21 | single QC/report page |
+| 11 | Growth validation | `check_growth.py` (COBRApy) | growth on a **declared** medium — not in the original Snakemake pipeline |
 
 The pipeline is a 1:1 Nextflow port of the original Snakemake implementation; the reused
-assets (conda environments, helper scripts, MultiQC config) are byte-identical copies.
+assets (conda environments, helper scripts, MultiQC config) are byte-identical copies. Step 11
+is the one addition: it closes the gap that the ported workflow never gave the models a medium
+(see *Model validation* below).
 
 ## Requirements
 
@@ -80,7 +83,7 @@ row-specific message.
 ### Verify without running the pipeline
 
 The repository ships a check suite — no conda environment is built and no tool is executed (the
-ten processes run from their `stub:` blocks, and the embedding check calls the two helper
+eleven processes run from their `stub:` blocks, and the embedding check calls the two helper
 scripts directly). Only the last line needs a python with `cobra`; the rest need nothing but
 Nextflow:
 
@@ -89,7 +92,7 @@ bash tests/ci/run-embed-check.sh           # MEMOTE / QUAST section scripts (no 
 bash tests/ci/run-lint.sh                  # nextflow lint (errors + warning ratchet)
 bash tests/ci/run-preview.sh               # compile + sample-sheet validation, good and bad
 bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
-bash tests/ci/run-stub-smoke.sh            # full 10-step DAG + published output contract
+bash tests/ci/run-stub-smoke.sh            # full DAG (24 tasks) + published output contract
 bash tests/ci/run-failure-isolation.sh     # injected single-sample failure + -resume
 PYTHON=.../bin/python3 bash tests/ci/run-growth-check.sh   # defined-medium growth (needs cobra)
 ```
@@ -130,6 +133,7 @@ data/qc/busco/<sample>/      BUSCO short summaries
 annotation/bakta/<sample>/   Bakta .gff3/.faa/.tsv/.ffn/.gbff/.txt
 models/carveme/<sample>/     CarveMe draft model (.xml + diamond .tsv)
 models/memote/<sample>/      MEMOTE index.html + result JSON + score TSV
+models/growth/               defined-medium growth check (growth_mqc.tsv + growth.tsv)
 reports/multiqc/             aggregate report (+ custom_content/, multiqc_report_data/)
 logs/                        per-step logs
 benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
@@ -147,7 +151,11 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 - **merges QUAST's own output files** into the report: the complete interactive `report.html`
   of every sample (same isolated-`srcdoc` treatment; QUAST's page is likewise fully
   self-contained) plus its plain-text `report.txt` summary, in one *QUAST: full assembly
-  reports* section placed directly after the QUAST statistics table.
+  reports* section placed directly after the QUAST statistics table, and
+- **reports the defined-medium growth result** as a table directly after the MEMOTE score
+  table (step 11): growth on M9 next to growth on the complete medium CarveMe ships, the
+  negative controls, and a count of failed checks. Its section configuration lives in the
+  TSV's own file header, so no `sp:` entry was added to the reused config (F26).
 
 The cohort shown in the report is exactly the sample sheet — built-in modules are fed an
 explicit file list, never a directory scan, so subset reports stay consistent.
@@ -176,7 +184,8 @@ So the medium is declared in the repository and asserted:
   the carbon source gives zero growth, and that anaerobic growth is lower. Run it directly, or
   via `bash tests/ci/run-growth-check.sh`.
 
-Measured on both models of the v0.1.0 cohort:
+Measured on both models of the v0.1.0 cohort — and reported in every MultiQC run, as the
+*Growth on defined medium* table right below the MEMOTE table:
 
 | | K-12 (`SRR1770413`) | O157:H7 (`SRR10194530`) |
 |---|---|---|
@@ -197,7 +206,7 @@ CarveMe's template biomass equation dominates — the check cannot discriminate 
 ## Performance
 
 The per-step wall times in `benchmarks/` are real measurements of the tool commands. They are
-**highly sensitive to the host machine**: on an idle 8-core machine the whole 10-step pipeline
+**highly sensitive to the host machine**: on an idle 8-core machine the whole pipeline
 for two samples takes **~38 minutes**, and the sum of all step times is within **3 %** of the
 original Snakemake baseline. On a machine that is simultaneously running other heavy software,
 or with the disk nearly full, individual steps can take an order of magnitude longer

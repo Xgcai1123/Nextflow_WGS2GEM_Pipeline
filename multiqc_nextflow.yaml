@@ -6,7 +6,7 @@
 #
 #   multiqc ... -c multiqc_config.yaml -c multiqc_nextflow.yaml
 #
-# It carries the three report-presentation requirements of the Nextflow port:
+# It carries the four report-presentation requirements of the Nextflow port:
 #
 #   1) Report sections are ordered by PIPELINE step, not alphabetically:
 #      FastQC -> QUAST -> BUSCO -> CarveMe -> MEMOTE -> runtimes -> versions.
@@ -34,6 +34,14 @@
 #      multiqc.py:895) and every `_mqc.html` with a unique `id:` becomes its own
 #      top-level module, so per-sample anchors could never be placed next to the
 #      QUAST tables. The fixed anchor below does that instead.
+#
+#   4) The growth check (F26) publishes its result as a `*_mqc.tsv` table whose
+#      whole section config -- id, title, plot_type, column headers -- lives in
+#      the FILE HEADER, which MultiQC's `_find_file_header()` parses from the
+#      '#'-prefixed YAML. That is deliberate: declaring it here would need an
+#      `sp:` entry, and a second `sp:` REPLACES (never merges) the block in the
+#      reused multiqc_config.yaml, silently dropping every existing
+#      custom-content section. Only its ordering anchor belongs here.
 # -----------------------------------------------------------------------------
 
 report_section_order:
@@ -44,6 +52,7 @@ report_section_order:
   busco:                     { order: 800 }    # step 6    BUSCO completeness
   carveme_summary:           { order: 700 }    # step 8    CarveMe draft model
   memote_summary:            { order: 600 }    # step 9    MEMOTE model quality
+  growth_on_medium:          { order: 550 }    # step 10   growth on a defined medium (F26)
   pipeline_runtime:          { order: -100 }   # summary   per-step runtimes
   multiqc_software_versions: { order: -200 }   # always last
 

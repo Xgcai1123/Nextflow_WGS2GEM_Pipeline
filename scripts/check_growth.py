@@ -55,6 +55,56 @@ import cobra  # noqa: E402  (after the logging setup on purpose)
 EX_TEMPLATE = "EX_{}_e"
 COMPLETE_UPTAKE = 1000.0
 
+# Columns of the emitted tables, in report order. `growth_complete` sits next to
+# `growth_M9` on purpose: the contrast between them IS the finding.
+MQC_COLUMNS = ["growth_M9", "growth_complete", "growth_no_carbon",
+               "growth_anaerobic", "failed_checks"]
+
+# MultiQC custom-content section, self-described in the file header.
+#
+# MultiQC's `_find_file_header()` collects every line starting with '#' from the
+# top of the file, strips the '#', and parses the result as YAML -- so a
+# `*_mqc.tsv` file needs no `sp:` entry in any config file. That matters here: a
+# second `sp:` in multiqc_nextflow.yaml would REPLACE the block in the reused
+# multiqc_config.yaml (replace-not-merge, F21), silently dropping every existing
+# custom-content section. The anchor MultiQC sorts a section on is this `id`.
+MQC_HEADER = '''\
+# id: "growth_on_medium"
+# section_name: "Growth on defined medium"
+# description: "Growth under a declared physiological medium -- aerobic M9 with glucose as the sole carbon source (media/m9_aerobic.yaml; the compound list is taken from CarveMe's own M9). A flux balance model has no single growth rate, because the medium is a boundary condition. The complete-medium column is the medium CarveMe ships, with every exchange reaction open, under which these drafts report about 66 per hour -- an assembly-rate artefact rather than a prediction."
+# plot_type: "table"
+# file_format: "tsv"
+# pconfig:
+#   id: "growth_on_medium_table"
+#   col1_header: "Sample"
+# headers:
+#   growth_M9:
+#     title: "Growth on M9 (1/h)"
+#     description: "Maximum biomass flux on aerobic M9 with glucose as the sole carbon source. Carbon is the limiting nutrient; the physical bound for any organism is 2.81 1/h."
+#     min: 0
+#     format: "{:,.3f}"
+#   growth_complete:
+#     title: "Complete medium (1/h)"
+#     description: "The same model with every exchange reaction open, i.e. the medium CarveMe ships. A value orders of magnitude above the M9 column means the model was never given a real medium."
+#     min: 0
+#     format: "{:,.3f}"
+#   growth_no_carbon:
+#     title: "No carbon source (1/h)"
+#     description: "Must be zero -- without a carbon source the model cannot satisfy the biomass equation."
+#     min: 0
+#     format: "{:,.3f}"
+#   growth_anaerobic:
+#     title: "Anaerobic (1/h)"
+#     description: "Must be below the aerobic value. E. coli ferments glucose, so zero is not expected."
+#     min: 0
+#     format: "{:,.3f}"
+#   failed_checks:
+#     title: "Failed checks"
+#     description: "Number of growth checks this sample failed; 0 means every check passed."
+#     min: 0
+#     format: "{:,.0f}"
+'''
+
 
 def exchange_id(compound: str) -> str:
     """BiGG exchange id for a CarveMe medium-db compound id (glc__D -> EX_glc__D_e)."""
@@ -93,7 +143,10 @@ def growth_on(model: "cobra.Model", medium: Dict[str, float]) -> float:
     flux = model.slim_optimize(error_value=0.0)
     if flux is None or flux != flux:  # None or NaN
         return 0.0
-    return float(flux)
+    flux = float(flux)
+    # Solver noise around zero would print as "-0.000" in the report (and in the
+    # console table); treat it as the zero it is.
+    return 0.0 if abs(flux) < max(model.tolerance, 1e-6) else flux
 
 
 def evaluate(model_path: str, cfg: dict, uptake: Dict[str, float]) -> dict:
@@ -179,6 +232,30 @@ def report(result: dict) -> None:
     print()
 
 
+def table_rows(results: List[dict]) -> List[List[str]]:
+    """Rows for the emitted tables, in MQC_COLUMNS order (blank when unavailable)."""
+    rows = []
+    for r in results:
+        rows.append([
+            r["sample"],
+            "%.3f" % r["growth_m9"] if "growth_m9" in r else "",
+            "%.3f" % r["growth_complete"] if "growth_complete" in r else "",
+            "%.3f" % r["growth_no_carbon"] if "growth_no_carbon" in r else "",
+            "%.3f" % r["growth_anaerobic"] if "growth_anaerobic" in r else "",
+            "%d" % sum(1 for _l, ok, _d in r["checks"] if not ok),
+        ])
+    return rows
+
+
+def write_tsv(path: str, rows: List[List[str]], header_comment: str = "") -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        if header_comment:
+            handle.write(header_comment)
+        handle.write("\t".join(["Sample"] + MQC_COLUMNS) + "\n")
+        for row in rows:
+            handle.write("\t".join(row) + "\n")
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Assert that a draft GEM grows on a defined physiological medium.")
@@ -189,6 +266,15 @@ def main(argv: List[str]) -> int:
         "media", "m9_aerobic.yaml"), help="Medium definition (YAML).")
     parser.add_argument("--json", dest="json_out", default=None,
                         help="Also write the results as JSON.")
+    parser.add_argument("--mqc-out", dest="mqc_out", default=None,
+                        help="Write a self-describing MultiQC custom-content TSV "
+                             "(*_mqc.tsv: MultiQC auto-discovers it, no sp: entry).")
+    parser.add_argument("--tsv-out", dest="tsv_out", default=None,
+                        help="Write the same table without the MultiQC header.")
+    parser.add_argument("--report-only", action="store_true",
+                        help="Do not fail on physiological checks; a mismatch between "
+                             "the medium and the model (unmappable component) still "
+                             "fails, because that is a configuration defect.")
     args = parser.parse_args(argv)
 
     cfg, uptake = load_medium(args.media)
@@ -200,20 +286,34 @@ def main(argv: List[str]) -> int:
     print("media: %s (%s)" % (args.media, cfg.get("name", "?")))
     print("units: %s   carbon source: %s\n" % (cfg.get("units", "?"),
                                                cfg.get("carbon_source", "?")))
-    results, failures = [], 0
+    results, failures, structural = [], 0, 0
     for path in models:
         result = evaluate(path, cfg, uptake)
         report(result)
         results.append(result)
+        if result.get("missing_components"):
+            structural += 1
         failures += sum(1 for _l, ok, _d in result["checks"] if not ok)
 
+    rows = table_rows(results)
+    if args.mqc_out:
+        write_tsv(args.mqc_out, rows, MQC_HEADER)
+        print("wrote %s" % args.mqc_out)
+    if args.tsv_out:
+        write_tsv(args.tsv_out, rows)
+        print("wrote %s" % args.tsv_out)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:
             json.dump({"media": args.media, "results": results}, handle, indent=2)
         print("wrote %s" % args.json_out)
 
     print("%d model(s), %d failed check(s)" % (len(results), failures))
-    return 1 if failures else 0
+    if structural:
+        print("structural failure: the medium does not match the model(s)", file=sys.stderr)
+        return 2
+    if failures and not args.report_only:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

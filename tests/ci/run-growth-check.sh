@@ -20,6 +20,12 @@
 #   The toy model is generated here rather than committed: it is plumbing, not data,
 #   and a fake biological model in fixtures/ invites being mistaken for one.
 #
+#   It also pins the exit-code contract (D17), which the pipeline depends on:
+#   0 = every check passed, 1 = a physiological check failed, 2 = the medium does
+#   not match the model (a configuration defect). --report-only downgrades 1 to 0
+#   -- so the pipeline reports an organism-specific window violation instead of
+#   dying on it -- but must never downgrade 2.
+#
 # REQUIREMENTS: a python3 with `cobra` importable (brings its own GLPK solver via
 #   swiglpk). Locally that is the pipeline's memote environment; in CI it is
 #   `pip install cobra`. Everything else in tests/ci needs only Nextflow or stdlib.
@@ -118,24 +124,38 @@ expect_nogrep "no failing check" "FAIL" "${WORK}/ok.log"
 
 # ---------------------------------------------------------------
 # Negative control 1: a medium component with no exchange reaction must be
-# caught, not silently treated as absent (which would look like zero growth)
+# caught, not silently treated as absent (which would look like zero growth).
+# This is a CONFIGURATION defect, so it exits 2 -- distinct from a failed
+# physiological check (1) and, crucially, it is not suppressed by --report-only.
 # ---------------------------------------------------------------
 echo "== negative control: medium typo =="
 sed 's/^  glc__D: 10/  glc__D_typo: 10/' "${MEDIA}" >"${WORK}/typo.yaml"
 "${PYTHON}" "${CHECKER}" --media "${WORK}/typo.yaml" "${WORK}/toy_m9.xml" \
     >"${WORK}/typo.log" 2>&1
-expect_eq "checker rejects an unmappable component" "1" "$?"
+expect_eq "checker rejects an unmappable component (structural, exit 2)" "2" "$?"
 expect_grep "names the missing component" "missing: EX_glc__D_typo_e" "${WORK}/typo.log"
 
 # ---------------------------------------------------------------
-# Negative control 2: an impossible plausibility window must fire
+# --report-only semantics (D17): a window violation becomes a report entry
+# rather than a failure, but a medium that does not match the model stays fatal.
+# Both halves are asserted, because the whole point is that the pipeline reports
+# physiology honestly without dying on organism-specific thresholds.
 # ---------------------------------------------------------------
-echo "== negative control: impossible window =="
+echo "== --report-only semantics =="
 sed 's/^  min_growth: 0.4/  min_growth: 5.0/' "${MEDIA}" >"${WORK}/window.yaml"
 "${PYTHON}" "${CHECKER}" --media "${WORK}/window.yaml" "${WORK}/toy_m9.xml" \
     >"${WORK}/window.log" 2>&1
-expect_eq "checker rejects growth outside the window" "1" "$?"
+expect_eq "a window violation fails the checker" "1" "$?"
 expect_grep "reports the window violation" "FAIL growth on M9 aerobic (glucose) within" "${WORK}/window.log"
+
+"${PYTHON}" "${CHECKER}" --media "${WORK}/window.yaml" --report-only "${WORK}/toy_m9.xml" \
+    >"${WORK}/window_ro.log" 2>&1
+expect_eq "the same violation is NOT fatal under --report-only" "0" "$?"
+expect_grep "but it is still reported" "FAIL growth on M9 aerobic (glucose) within" "${WORK}/window_ro.log"
+
+"${PYTHON}" "${CHECKER}" --media "${WORK}/typo.yaml" --report-only "${WORK}/toy_m9.xml" \
+    >"${WORK}/typo_ro.log" 2>&1
+expect_eq "a medium/model mismatch stays fatal even under --report-only" "2" "$?"
 
 # ---------------------------------------------------------------
 # Negative control 3: the physical bound must fire independently of the window

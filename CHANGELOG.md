@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The growth result is a pipeline step and a MultiQC section** (`GROWTH_CHECK`, `models/growth/`,
+  F26/D17). Until now the defined-medium check only ran when invoked by hand, so the report said
+  nothing about whether a model grows — the artefacts landed next to a MEMOTE score that does not
+  cover growth at all. Now:
+  - `scripts/check_growth.py` gained `--mqc-out` / `--tsv-out` / `--report-only`;
+  - the process runs **once for the cohort** — one section with a row per sample, mirroring D15 —
+    and publishes a self-describing `growth_mqc.tsv` that MultiQC auto-discovers;
+  - its section configuration lives in the **file header**, which `_find_file_header()` parses
+    from the `#`-prefixed YAML. That is deliberate: declaring it in the overlay would need an
+    `sp:` entry, and a second `sp:` REPLACES the block in the reused `multiqc_config.yaml`
+    (replace-not-merge, F21), silently dropping every existing custom-content section;
+  - the section is ordered 550, i.e. directly after the MEMOTE table (600) and before the embedded
+    full reports and the runtimes table: the summary tables stay in pipeline order, the large
+    embedded documents follow;
+  - `--report-only` means a plausibility-window violation is **reported** (it appears in the
+    report and the log) rather than failing the run, because the window is *E. coli*-specific;
+    a medium that does not match the model still exits 2, since that is a configuration defect;
+  - no `bench_start/bench_finish`: `benchmarks/` carries the Snakemake step set that the reused
+    `multiqc_extras.py` maps to labelled runtime columns, so a file there would surface as a raw
+    `growth_check` column.
+  Adding the step also **caught a real hole in the check suite**: the new `publishDir` was not
+  redirected by `tests/ci/ci.config`, so the first `-stub-run` published empty placeholders into
+  the real `models/growth/` — the F18 guard flagged it (that is what the guard is for). Fixed by
+  adding the redirect, and the stray stub files were removed. The DAG is now 24 tasks.
 - **Growth validation on a defined physiological medium.** A flux balance model has no single
   growth rate — the medium is a boundary condition. CarveMe ships these models with all 342
   exchange reactions open (a complete medium), under which they "grow" at **66 h⁻¹**: with
