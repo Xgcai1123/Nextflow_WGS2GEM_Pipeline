@@ -6,7 +6,7 @@
 #
 #   multiqc ... -c multiqc_config.yaml -c multiqc_nextflow.yaml
 #
-# It carries the two report-presentation requirements of the Nextflow port:
+# It carries the three report-presentation requirements of the Nextflow port:
 #
 #   1) Report sections are ordered by PIPELINE step, not alphabetically:
 #      FastQC -> QUAST -> BUSCO -> CarveMe -> MEMOTE -> runtimes -> versions.
@@ -25,12 +25,22 @@
 #      silently drop the patterns defined in multiqc_config.yaml.
 #      Those sections keep their default order values, which land after the
 #      MEMOTE score table (600) and before the runtimes table (-100).
+#
+#   3) QUAST's own output files are merged in too: `report.html` (the full
+#      self-contained interactive report) and `report.txt` are embedded by
+#      scripts/quast_html_section.py into a SINGLE `quast_full_mqc.html`.
+#      One section for the whole cohort, not one per sample -- MultiQC matches
+#      `report_section_order` anchors EXACTLY (no globs; multiqc 1.21
+#      multiqc.py:895) and every `_mqc.html` with a unique `id:` becomes its own
+#      top-level module, so per-sample anchors could never be placed next to the
+#      QUAST tables. The fixed anchor below does that instead.
 # -----------------------------------------------------------------------------
 
 report_section_order:
   # --- pipeline order (higher = earlier) ---
   fastqc:                    { order: 1000 }   # step 1/3  FastQC (raw + trimmed)
-  quast:                     { order: 900 }    # step 5    QUAST assembly QC
+  quast:                     { order: 900 }    # step 5    QUAST assembly QC table
+  quast_full:                { order: 850 }    # step 5    QUAST full reports (embedded)
   busco:                     { order: 800 }    # step 6    BUSCO completeness
   carveme_summary:           { order: 700 }    # step 8    CarveMe draft model
   memote_summary:            { order: 600 }    # step 9    MEMOTE model quality

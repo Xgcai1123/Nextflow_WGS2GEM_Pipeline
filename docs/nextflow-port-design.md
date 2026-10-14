@@ -58,6 +58,7 @@ WGSpipeline-nextflow/
 │   ├── multiqc_extras.py
 │   ├── memote_report.py
 │   ├── memote_html_section.py  # 新增：把 MEMOTE HTML 包成 MultiQC 内嵌段（F21）
+│   ├── quast_html_section.py   # 新增：把 QUAST 自身产物包成 MultiQC 内嵌段（F24）
 │   ├── bin/bakta               # AMR-guard 包装器入口
 │   └── amr_guard/amr_chunk_guard.py
 ├── bin/
@@ -651,7 +652,7 @@ process MEMOTE {
 
 ## 9. MULTIQC 汇聚 process 设计
 
-单 process 内四段（对应 snakefile `rule multiqc` 的 1→2→3 顺序，另加 2b 的 MEMOTE 内嵌），队列范围严格等于样本表：
+单 process 内五段（对应 snakefile `rule multiqc` 的 1→2→3 顺序，另加 2b 的 MEMOTE 内嵌与 2c 的 QUAST 自身产物内嵌），队列范围严格等于样本表：
 
 | 项 | 值 |
 |---|---|
@@ -660,10 +661,11 @@ process MEMOTE {
 | 输入 | `val report_name`（F19：运行时算出的报告名走 channel，不用运行时 params 变更）+ `val samples`（SAMPLE_NAMES 列表）+ `val upstream`（收集触发，保证上游完成）+ `path multiqc_config`（原样复用）+ `path multiqc_config_extra`（F21 排版覆盖层） |
 | 输出 | `path("${report_name}.html")` → publish 到 `reports/multiqc/` |
 
-**报告排版（F21，用户要求）：**
+**报告排版（F21 + F24，用户要求）：**
 
 1. **章节与 General Statistics 列一律按管线步骤排序**（FastQC → QUAST → BUSCO → CarveMe → MEMOTE → 耗时 → 版本），由 `multiqc_nextflow.yaml` 覆盖层实现——该覆盖层以第二个 `-c` 叠加，**复用配置 `multiqc_config.yaml` 保持字节一致**（决策 D4 不受影响）；
 2. **MEMOTE 的完整 `index.html` 内嵌进总报告**：MEMOTE 是自带 CSS/JS 的完整 Angular 页面（约 4.3 MB/样本），直接内联会与 MultiQC 页面互相污染（其 `<base href="/">` 会改变整页基准 URL），故由 `scripts/memote_html_section.py` 包成 `<iframe srcdoc="…">`——iframe 是独立文档，CSS/JS 相互隔离，`srcdoc` 让报告保持自包含（`file://` 或 HTTP 打开都能渲染）。代价：报告由 4.9 MB 增至 15.2 MB。
+3. **QUAST 自身产物内嵌进总报告（F24）**：`report.tsv` 早已被内置 `quast` 模块与 `multiqc_extras.py` 消费，此处补齐另外两个产物——完整交互报告 `report.html`（约 380 KB/样本，自带 Bootstrap CSS 与 22 段内联 JS，无 `<base>`、无外部资源引用）与纯文本摘要 `report.txt`。由 `scripts/quast_html_section.py` 生成**单个** `quast_full_mqc.html`（内含每样本一个 `<iframe srcdoc>` + 折叠的 `report.txt`），在覆盖层中以固定锚点 `quast_full: {order: 850}` 排在 QUAST 表之后、BUSCO 之前。
 
 ```groovy
 process MULTIQC {
@@ -721,9 +723,21 @@ process MULTIQC {
         --report-dir ${params.multiqc_dir} \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
+    # ---- 2c. QUAST 自身输出文件内嵌段（F24；report.html 完整交互报告 +
+    #          report.txt 纯文本。全队列只出一个 *_mqc.html：report_section_order
+    #          的锚点是精确匹配、不支持通配，逐样本 id 排不到 QUAST 表旁）----
+    rm -rf quast_html
+    mkdir -p quast_html
+    "\\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/quast_html_section.py \\
+        --quast-dir ${params.quast_dir} \\
+        --samples "${samples.join(' ')}" \\
+        --outdir quast_html \\
+        --report-dir ${params.multiqc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
     # ---- 3. 只喂本队列的显式文件（不是目录！）----
-    # -c 两次：先原样复用的配置，再叠排版覆盖层（章节/列顺序 + MEMOTE 内嵌）
-    multiqc ${qc_files.join(' ')} busco_stage ${params.cc_dir} memote_html \\
+    # -c 两次：先原样复用的配置，再叠排版覆盖层（章节/列顺序 + MEMOTE / QUAST 内嵌）
+    multiqc ${qc_files.join(' ')} busco_stage ${params.cc_dir} memote_html quast_html \\
         -c ${params.multiqc_config} \\
         -c ${params.multiqc_config_extra} \\
         -o . -f -n ${params.report_name} \\
@@ -735,11 +749,11 @@ process MULTIQC {
 ```
 
 **对齐点与差异：**
-- 四段结构与 snakefile 逐段对应：custom content 清空+生成 → BUSCO 软链 staging（命名 `short_summary_<sample>.txt`，匹配 MultiQC 的 fn 模式且 trim 出干净样本名）→ **MEMOTE 完整 HTML 内嵌** → `multiqc` 显式文件列表；
+- 五段结构与 snakefile 逐段对应：custom content 清空+生成 → BUSCO 软链 staging（命名 `short_summary_<sample>.txt`，匹配 MultiQC 的 fn 模式且 trim 出干净样本名）→ **MEMOTE 完整 HTML 内嵌** → **QUAST 自身产物内嵌（F24）** → `multiqc` 显式文件列表；
 - `qc_files` 列表内容 = `multiqc_cohort_files()` 的产物（4 个 fastqc zip + `report.tsv` × 样本数），**built-in 模块绝不扫目录**（否则子集报告里 custom content 是子集、FastQC/QUAST 却是全队列，自相矛盾）；
 - 差异一：`multiqc` 的 `-o .` 写进 workdir，再由 publishDir 发布 `reports/multiqc/`（Snakemake 直写仓库目录）；custom content 仍写仓库 `reports/multiqc/custom_content/`（与原布局一致，每次先清空）；
 - 差异二：busco staging 目录改在 workdir（Snakemake 在仓库目录）——纯临时物，不进仓库更干净；软链源仍是仓库内的 BUSCO 产物（绝对路径，不会拼出无效路径）；
-- 差异三（F21）：报告章节/General Stats 列按管线顺序排列，且 MEMOTE 完整 HTML 内嵌——Snakemake 版无此两项，属移植版新增的呈现能力（不改任何数值产物）；
+- 差异三（F21 + F24）：报告章节/General Stats 列按管线顺序排列，且 MEMOTE 与 QUAST 的自身报告完整内嵌——Snakemake 版无此三项，属移植版新增的呈现能力（不改任何数值产物）；
 - `-c` 显式指定 `multiqc_config.yaml` + `multiqc_nextflow.yaml`；两者都作为 input，改任一个都会改变 MULTIQC 的 input hash → `-resume` 自动重跑报告。
 
 ## 10. 计时与 benchmark 适配（`bin/task_env.sh`）
@@ -972,6 +986,14 @@ profiles {
   - **`ignore`**（唯一会继续独立分支的策略）：23 个任务全部提交、**exit 0**，死任务只留 `NOTE: Process ... Error is ignored`，原始产物留下空洞 → **静默成功**，不可作默认；作为负对照固化进 CI（`tests/ci/ignore-strategy.config`）。
   - **`beforeScript` 不可插值进程输入**：它在**配置解析期**求值，此时 `sample`/`read` 尚不存在，严格解析器直接拒绝（`` `sample` is not defined ``）；写成普通字符串则**原样**进 `.command.run`（实测 `bad substitution`，且该行在 `nxf_stage` 之前执行）。注入器因此改从任务自身 wrapper 的 `### name:` 头读取 tag（`$0` = `.command.run`）。该头是 Nextflow 内部约定，所以测试**断言注入确实触发**：将来若头格式变化，注入静默失效→`run-failure-isolation.sh` 立刻转红，而不是假通过。
 
+- **F24 把 QUAST 自身产物并入 MultiQC（用户要求，2026-10-14）**：QUAST 5.2.0 每样本产出三个文件——`report.tsv`（早已被内置 `quast` 模块与 `multiqc_extras.py` 消费）、`report.txt`（纯文本摘要）、`report.html`（约 380 KB 完整交互报告）。实测该 HTML 是**自包含**的：无 `<base>` 标签、无本地 `src`/`href`（仅一个指向 cab.spbu.ru 的致谢链接），CSS 与 22 段脚本全部内联。因此沿用 F21 的 iframe 方案嵌入，另把 `report.txt` 放进折叠的 `<details><pre>`。读 MultiQC 1.21 源码后确认两条硬约束，决定了实现形态：
+  - **`report_section_order` 的锚点是精确匹配、不支持通配**（`multiqc/multiqc.py:895` 为 `if anchor not in section_id_order.keys(): continue`，未命中的锚点只写 debug 日志**静默忽略**）；
+  - **每个 `_mqc.html` 的 `id:` 会各自成为一个顶层模块**（`modules/custom_content/custom_content.py:299` `anchor=mod["config"].get("section_anchor", c_id)`），而**同 `id` 的 HTML 内容会互相覆盖**（同文件 184–185 行 `cust_mods[c_id]["data"] = parsed_data`）。
+  故"逐样本一个 QUAST 内嵌段"（照抄 MEMOTE 的写法）**无法**排到 QUAST 表旁：锚点是 `<样本名>` 无法预知、也无法写进静态覆盖层。改为**全队列只出一个** `quast_full_mqc.html`（固定锚点 `quast_full`，覆盖层给 `order: 850`），内部按样本分块（标题 + 独立产物相对链接 + `report.txt` 折叠块 + `report.html` 的 iframe）。
+  - **iframe 自适应高度**：`srcdoc` 帧与父页同源，故 `onload` 里用 `contentDocument.documentElement.scrollHeight` 把帧高调成内容高度（避免嵌套滚动条），并用 `try{…}catch(e){}` 包住 + 固定 1400 px 兜底——若某浏览器把 `file://` 下的 srcdoc 帧当作不透明源，只会退化成固定高度，不会让报告报错。
+  - **验收（2026-10-14）**：报告 `iframe srcdoc` 由 2 增至 **4**（2 MEMOTE + 2 QUAST），且用 `html.parser` 解析后逐个比对——**4 个 srcdoc 全部与源文件逐字节相同**（属性值由解析器反转义，故直接等值比较即证明转义无损）；章节顺序 `fastqc(1000) < quast(900) < quast_full(850) < busco(800) < carveme_summary(700) < memote_summary(600) < memote_full_*(默认) < pipeline_runtime(-100) < multiqc_software_versions(-200)`；报告 15.24 MB → **16.12 MB**（+873,573 B，与嵌入载荷 872,684 B 相符）；MultiQC DOM 中 `<base href="/">` 计数仍为 0（未污染）；两样本 `report.txt` 内容均在报告中可按原文检索。
+  - 报告由**与 MULTIQC process 完全一致的命令**在仓库外重放生成后发布（同 §12.1 F19/F20 的既有做法）。原因：上一轮 `-resume` 会话缓存只含部分任务（磁盘 99%、仅 8.3 GiB 可用，低于 F22 的 20 GiB 闸门，需显式 `--min_free_disk_gb`；且被杀死的探查运行把任务写进了另一个会话的缓存，`.nextflow/history` 里最后一条指向的会话没有完整 23 任务），不存在只重跑 MULTIQC 的 `-resume` 路径。改跑 `tests/ci/run-lint.sh`（0 error / 38 warning = 告警棘轮未涨）与 `tests/ci/run-stub-smoke.sh`（23 任务 DAG + 产物契约 + 根产物零改写）验证 `main.nf` 改动。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1070,6 +1092,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D12 | 失败语义**保持** `errorStrategy = 'finish'`：失败必须响亮（exit 1）且不留半成品；实测它**不等价**于 `--keep-going`（不继续独立分支），唯一会继续的 `ignore` 会 exit 0 静默成功，故拒绝；补偿手段是"已完成任务保留 + `-resume` 收敛"，文档按实测措辞（F23） | 已定（2026-10-14 注入实测） |
 | D13 | F20 磁盘余量由 README 提醒改为 `workflow.main` 开头硬预检（`min_free_disk_gb`，默认 20 GiB，`0` 关闭）；逐个输出目录解析"最近存在祖先"的**文件系统**并去重，任务启动前中止 | 已定（2026-10-14 实测三分支） |
 | D14 | 回归守卫用 `tests/ci/*.sh` 承载、GitHub Actions 只做"装 Nextflow + 调脚本"：本地与 CI 同一批断言；全部用 `-stub-run` + 禁用 conda，真实数据验收仍人工 | 已定（2026-10-14） |
+| D15 | 内嵌第三方工具自身报告（MEMOTE / QUAST）时，**每个工具一个固定锚点的章节**，不按样本拆章：`report_section_order` 锚点精确匹配、无法预知样本名，逐样本 id 会让章节落到管线顺序之外；代价是章节内按样本分块而非每样本一个折叠标题 | 已定（2026-10-14，F24） |
 
 ## 17. 里程碑与后续开放问题
 

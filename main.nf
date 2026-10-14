@@ -340,7 +340,7 @@ process MULTIQC {
     val  upstream                // collected trigger: all upstream steps done
     path multiqc_config
     path multiqc_config_extra    // presentation overlay: pipeline section order +
-                                 // full MEMOTE HTML embedding (F21)
+                                 // full MEMOTE / QUAST HTML embedding (F21/F24)
 
     output:
     path("${report_name}.html")
@@ -385,6 +385,19 @@ process MULTIQC {
         --report-dir ${params.multiqc_dir} \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
+    # ---- 2c. QUAST 自身输出文件内嵌段（report.html 完整交互报告 + report.txt 纯文本；
+    #          report.html 是自带 Bootstrap CSS/22 段 JS 的完整页面，同样包成独立 iframe；
+    #          全队列只出一个 *_mqc.html —— report_section_order 的锚点是精确匹配、
+    #          不支持通配，逐样本 id 无法排到 QUAST 表旁，故用固定锚点 quast_full）----
+    rm -rf quast_html
+    mkdir -p quast_html
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/quast_html_section.py \\
+        --quast-dir ${params.quast_dir} \\
+        --samples "${samples.join(' ')}" \\
+        --outdir quast_html \\
+        --report-dir ${params.multiqc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
     # ---- 3. 只喂本队列的显式文件（不是目录！）----
     qc_files=""
     for s in ${samples.join(' ')}; do
@@ -394,7 +407,7 @@ process MULTIQC {
     done
 
     # -c twice: the reused config first, the presentation overlay second.
-    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html \\
+    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html \\
         -c ${multiqc_config} \\
         -c ${multiqc_config_extra} \\
         -o . -f -n ${report_name} \\

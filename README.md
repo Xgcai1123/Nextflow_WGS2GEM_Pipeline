@@ -139,7 +139,11 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
   (FastQC → QUAST → BUSCO → CarveMe → MEMOTE → runtimes → software versions), and
 - **embeds the full MEMOTE snapshot report** of every sample inline (each MEMOTE page is a
   self-contained Angular document, so it is wrapped in an isolated `srcdoc` iframe to keep
-  its CSS/JS from clashing with the MultiQC page).
+  its CSS/JS from clashing with the MultiQC page), and
+- **merges QUAST's own output files** into the report: the complete interactive `report.html`
+  of every sample (same isolated-`srcdoc` treatment; QUAST's page is likewise fully
+  self-contained) plus its plain-text `report.txt` summary, in one *QUAST: full assembly
+  reports* section placed directly after the QUAST statistics table.
 
 The cohort shown in the report is exactly the sample sheet — built-in modules are fed an
 explicit file list, never a directory scan, so subset reports stay consistent.
@@ -200,9 +204,10 @@ and 67.7.
 main.nf                     DSL2 workflow: validation + 10 processes
 nextflow.config             parameters, process settings, conda, profiles
 multiqc_config.yaml         MultiQC config (byte-identical reused asset)
-multiqc_nextflow.yaml       MultiQC presentation overlay (step order, MEMOTE embedding)
+multiqc_nextflow.yaml       MultiQC presentation overlay (step order, MEMOTE + QUAST embedding)
 envs/                       conda environment definitions (8, byte-identical)
-scripts/                    helper scripts (byte-identical) + memote_html_section.py
+scripts/                    helper scripts (byte-identical) + memote_html_section.py,
+                            quast_html_section.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
 docs/                       design document, asset provenance, audit notes
 tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard, failure isolation)

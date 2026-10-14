@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **QUAST's own output files are merged into the MultiQC report.** `report.tsv` was already
+  consumed (built-in `quast` table + `quast_generalstats`), so the new
+  `scripts/quast_html_section.py` adds the other two: the complete interactive `report.html`
+  of every sample (~380 KB each, a fully self-contained document — no `<base>`, no external
+  assets) embedded in an isolated `srcdoc` iframe, and the plain-text `report.txt` in a
+  collapsible block. It emits **one** `quast_full_mqc.html` for the whole cohort, ordered by a
+  fixed `quast_full` anchor (850) directly after the QUAST statistics table and before BUSCO.
+  One section, not one per sample, because MultiQC 1.21 matches `report_section_order` anchors
+  exactly (no globs) while each `_mqc.html` with a unique `id:` becomes its own top-level
+  module — per-sample anchors could not be placed next to the QUAST table (design doc F24/D15).
+  Verified: 4 `srcdoc` frames (2 MEMOTE + 2 QUAST) each round-trip byte-identical to its source
+  file, section order fastqc → quast → quast_full → busco → … → versions, report
+  15.24 MB → 16.12 MB, and no `<base href="/">` leaked into the MultiQC DOM.
 - **Disk-space pre-flight check** (`main.nf`, `min_free_disk_gb`, default 20 GiB). The
   workflow now resolves the filesystem of `work/` and of every output directory (via the
   nearest existing ancestor, so a first run before any directory exists is still checked) and
