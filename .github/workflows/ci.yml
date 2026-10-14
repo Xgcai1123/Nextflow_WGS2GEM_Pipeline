@@ -90,9 +90,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # No Nextflow and no conda: the checker needs only cobra, which brings its
-      # own GLPK solver (swiglpk) as a hard dependency.
-      - name: Install cobra
-        run: pip install cobra
+      # No Nextflow and no conda: the checker needs cobra (which brings its own
+      # GLPK solver, swiglpk) plus PyYAML for the medium definition -- cobra does
+      # NOT depend on PyYAML, which is why the first real CI run of this job
+      # failed with an import error rather than a check failure.
+      - name: Install cobra + PyYAML
+        run: pip install cobra pyyaml
       - name: Defined-medium growth check + its negative controls (F25)
         run: bash tests/ci/run-growth-check.sh

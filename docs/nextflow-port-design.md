@@ -1007,7 +1007,7 @@ profiles {
   - **对策（D16）**：介质版本化为 `media/m9_aerobic.yaml`（**组分直接取 CarveMe 自带 `carveme/data/input/media_db.tsv` 的 `M9` 行，20 个化合物，不自行发明**；摄取上限葡萄糖 10 / O₂ 20 / 其余 1000 mmol·gDW⁻¹·h⁻¹，明确标注为**项目约定而非实测**），断言由 `scripts/check_growth.py` 自己做——**不依赖上游那条极性反了的测试**。
   - **实测（两个 v0.1.0 模型）**：M9 好氧 → **0.953 h⁻¹**（两样本 0.9528 / 0.9526）；葡萄糖摄取**恰好饱和在 10.000/10**（=碳是唯一限制性营养）、O₂ 17.6/20（不限制）；无碳源 → 0.000；厌氧 → 0.228（低于好氧）；出厂全开介质 → 66.000。**隐含得率 95 gDW/mol 葡萄糖 ≈ 0.53 g/g，对照实测约 0.5 g/g**——这是 66 h⁻¹ 永远过不了的独立合理性检验。
   - **边界（诚实声明）**：该检查证明的是**生理合理性，不是定量准确性**（后者需要实测生长数据）；且两个模型给出**相同**生长速率，因为 CarveMe 的模板生物质方程占主导——**该检查无法区分菌株**。
-  - **CI 守卫**：`tests/ci/run-growth-check.sh` + 独立 job（唯一需要 `cobra` 的 job，`pip install cobra` 自带 GLPK/swiglpk）。真实模型是生成物、不在仓库里，故 CI 用**测试内生成的合成模型**（行为由构造保证）验证 checker 本身，并带三条负对照（介质组分无法映射 / 阈值不可能满足 / 越过物理上限）——每条都必须让脚本非零退出。
+  - **CI 守卫**：`tests/ci/run-growth-check.sh` + 独立 job（唯一需要 `cobra` + `PyYAML` 的 job；`pip install cobra` 自带 GLPK/swiglpk 但**不带 PyYAML**，F28）。真实模型是生成物、不在仓库里，故 CI 用**测试内生成的合成模型**（行为由构造保证）验证 checker 本身，并带三条负对照（介质组分无法映射 / 阈值不可能满足 / 越过物理上限）——每条都必须让脚本非零退出。
 
 - **F26 生长验证进管线、进报告（用户指出"multiqc 里好像没有这个信息"，2026-10-15）**：F25 的结论此前只在**手动**调用时产生，报告里没有它；而报告里唯一与模型质量相关的数字（MEMOTE 总分）又**不覆盖**生长测试（F25 发现其权重为 0）。于是新增 `GROWTH_CHECK` process（coda = `envs/memote.yaml`，含 cobra + 求解器）。实现与两个关键机制：
   - **全队列一个任务**（不是每样本一个），与报告"一个章节、每样本一行"同形（cf. D15）。产出 `models/growth/growth_mqc.tsv`（自描述）+ `growth.tsv` + `logs/growth/growth_check.log`；MULTIQC 把它作为 **`path` 文件输入**（既传入命令行、又天然构成对 GROWTH_CHECK 的依赖，无需再塞进 `up_ok`）。
@@ -1025,6 +1025,21 @@ profiles {
   - 差的 10 个**全部是 cobra 加载时自动创建**的 exchange 反应——文件里这些胞外边界代谢物没有对应 exchange：`EX_na1_e, EX_ni2_e, EX_cd2_e, EX_cm_e, EX_hg2_e, EX_fusa_e, EX_gbbtn_e, EX_novbcn_e, EX_doxrbcn_e, EX_ttrcyc_e`。**踩坑记录**：SBML 里 reaction 的 `id` 形如 `R_<biggid>`（`R_12DGR140tipp`），而 cobra 暴露的是 `<biggid>`；直接对两个 id 集合做差会得到"2495 个全不匹配"的假象（我也先被这个坑了一次），必须按 `R_` 前缀对齐后再比。
   - **对策**：**不改复用资产**（D4：`multiqc_extras.py` 与 `multiqc_config.yaml` 保持字节一致），改用覆盖层的 **`section_comments`**（按**章节 anchor** 键控，`multiqc/modules/base_module.py:60` 读取）在 `carveme_summary` 章节内就地解释。实测注释渲染在 CarveMe 章节描述之后、表格之前。
   - **顺带发现的互操作性隐患**：M9 配方里的 `na1` 与 `ni2` **恰好落在这 10 个"文件里没有、cobra 补上"的 exchange 里**。也就是说 `check_growth.py` 能把它们映射成功，**依赖 cobra 的自动补齐**；换一个不自动补 exchange 的下游工具加载同一个 SBML，介质应用会报"缺组分"。已在 F25/D16 的语境下记明：**模型的 exchange 集合是"文件 ∪ cobra 补齐"，不是文件本身自足的。**
+
+- **F28 第一次真实 CI 运行失败——3/4 job 红，两个根因是环境、还有一个是本项目的错误声称（用户报告"ci 跑不过"，2026-10-15）**：push `54ab47f` 触发的工作流 run `38606410168` 结果是 **failure**（lint job 通过，smoke / failure-isolation / growth-validation 三个失败）。API 顺带查明:**该仓库在此之前没有任何 workflow run**——见下方的更正。
+  - **更正（重要）**：§17 行 6 原先写"**CI 3 个 job 全绿**"。这是**从未在 GitHub 上验证过**的说法:run 列表显示 2026-10-15 之前该仓库一次都没跑过 workflow，那个结论来自**本地跑脚本**。**本地脚本通过 ≠ CI 通过**——runner 的 CPU 数、已装依赖都与本机不同，本例中两者恰好各自踩了一个坑。这正是本项目反复强调的"不要声称未验证的事"，记在这里以免再犯。
+  - **根因一：runner 只有 2 个 CPU（环境）**。`nextflow.config` 给 FASTQC_RAW / FASTQC_TRIMMED / BUSCO / BAKTA / CARVEME / MEMOTE 声明 `cpus = 4`、`SPADES`/`TRIMMOMATIC` 用 `params.threads_default`（8）。Nextflow 直接拒绝调度:
+    ```
+    ERROR ~ Error executing process > 'FASTQC_RAW (CI_A_1)'
+    Caused by: Task requirement exceeds available CPUs -- req: 4; avail: 2
+    ```
+    后果:smoke job 一个产物都没发布（随后 65 条产物断言连环失败）;failure-isolation job 的**两个**内部 run 同样当场死掉，它的断言把结果读成"注入失效""`-resume` 失效"（其实连第一个任务都没跑起来）。
+    **对策（D18）**：在 `tests/ci/ci.config` 里 `process { resourceLimits = [cpus: 1] }`。stub 任务不执行任何工具，CPU 声明在 CI 里没有意义;用**单一上限**而不是逐个 `withName` 列表，是因为后者会随新增 process 静默失效。
+    **本地实测**（用一个探针配置把 `FASTQC_RAW` 顶到 `cpus = 999` 来复现这一类失败）：`nextflow -c probe -c ci.config run . -stub-run` → **24 任务照常提交**;只给 probe 不给 ci.config 时同一份配置报 `req: 999; avail: 8`（本机 8 核）。即"探针先、clamp 后"的顺序与真实层叠一致。
+  - **根因二：`pip install cobra` 不装 PyYAML（依赖）**。新 growth job 只装了 cobra（cobra 自带 GLPK/swiglpk，因此安装步骤本身成功），而 `scripts/check_growth.py` 用 PyYAML 读介质定义 → 死在 `import yaml`。**更糟的是失败的样子**：脚本把它报成 **13 条互相矛盾的断言失败**（"检查不通过"、负对照该 2 却是 1、窗口与物理上限都没触发、介质自身一致性也不过……），**崩溃伪装成了检查结果**。
+    **对策**：CI 改成 `pip install cobra pyyaml`;`run-growth-check.sh` 开头**同时预检 cobra 与 yaml**，缺任一个就以 **exit 2** 退出并打印确切的安装命令与 `PYTHON=` 用法。本地用一个"装了 cobra 但没有 yaml"的干净 venv 验证了新预检（exit 2 + 明确提示），用完整环境验证 16 条断言仍全绿。
+  - **根因三（可诊断性，非缺陷）**：`run-stub-smoke.sh` 在一次早退后仍然跑完 65 条产物断言，把"1 条根因"淹没成"65 条失败"。它确实把 nextflow 输出 tail 打了出来（根因就在那段里），行为保留;教训记下:**排查 CI 失败先看 `---- nextflow output ----` 段**，而不是数 FAIL 行数。
+  - **验证方式也改进了**：这次不再"本地绿就宣布 CI 绿"，而是 push 后**回读 GitHub 上的 run 结果**再下结论（本条的结论即为回读所得）。
 
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
@@ -1090,7 +1105,7 @@ nextflow run . -resume
 ### 阶段 D：每次 push 的自动化守卫（2026-10-14 起，`.github/workflows/ci.yml`）
 CI 只安装 Nextflow，然后调用 `tests/ci/run-*.sh`——**本地跑与 CI 跑是同一批断言**，不会漂移。
 lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 DAG stub 干跑（24 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照、F21/F24 内嵌脚本直跑（章节头 + 转义往返 + 排序锚点；不需要 Nextflow，0.3 秒）、F25 生长检查直跑（合成模型 + 3 条负对照；只需 cobra，12 秒）。
-**不建 conda 环境、不跑真实工具**：实测 `run-lint` 2s / `run-stub-smoke` 8s / `run-disk-guard` 16s / `run-failure-isolation` 27s / `run-preview` 33s，三个 job 各自约 1 分钟内；真实数据的 10 步验收（阶段 B）仍是人工流程。
+**不建 conda 环境、不跑真实工具**：实测 `run-lint` 2s / `run-stub-smoke` 8s / `run-disk-guard` 16s / `run-failure-isolation` 27s / `run-preview` 33s / `run-embed-check` 0.3s，各 job 约 1 分钟内；`growth-validation` 另需 `pip install cobra pyyaml`（F28）。真实数据的 10 步验收（阶段 B）仍是人工流程。
 
 ## 15. 风险登记表
 
@@ -1128,6 +1143,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D15 | 内嵌第三方工具自身报告（MEMOTE / QUAST）时，**每个工具一个固定锚点的章节**，不按样本拆章：`report_section_order` 锚点精确匹配、无法预知样本名，逐样本 id 会让章节落到管线顺序之外；代价是章节内按样本分块而非每样本一个折叠标题 | 已定（2026-10-14，F24） |
 | D16 | 生长验证**自建**而非委托上游：介质版本化为 `media/m9_aerobic.yaml`（组分取 CarveMe 自带 M9 行，不自行发明），断言由 `scripts/check_growth.py` 承担（组分可映射 / 落窗 [0.4,1.5] / 物理上限 2.81 / 无碳源为 0 / 厌氧更低）。理由：MEMOTE 0.17.0 的 `test_fast_growth_default` 断言极性反了、且该组测试进不了分数（F25），把物理上限委托给它等于没有守卫。**不**把该断言塞进 `main.nf` 做硬失败：窗口是 *E. coli* 特定的，而 BUSCO 谱系可换、样本可为非肠杆菌；管线的普适断言只有"不长于已知最快细菌"与"无碳源不长" | 已定（2026-10-15，F25） |
 | D17 | 生长验证**入管线**的具体形态：全队列**一个** `GROWTH_CHECK` 任务（与报告"一章节、每样本一行"同形，cf. D15）；章节配置写在 `*_mqc.tsv` 的**文件头**而非覆盖层（否则需要第二个 `sp:`，会替换掉复用配置的 sp 块，F21）；`--report-only` = 窗口越界只报告不失败，介质与模型不匹配仍 exit 2；**不写 benchmark**（会以生名 `growth_check` 出现在耗时表） | 已定（2026-10-15，F26） |
+| D18 | CI 的 CPU 上限写在 `tests/ci/ci.config`（`process.resourceLimits = [cpus: 1]`），**不**削弱 `nextflow.config`：runner 只有 2 核而真实工具声明 4–8，Nextflow 会直接拒绝调度（F28）。用单一上限而非逐 process 的 `withName` 列表，因为后者会随新增 process 静默失效；stub 任务不执行工具，CPU 声明在 CI 里无意义 | 已定（2026-10-15，F28） |
 
 ## 17. 里程碑与后续开放问题
 
@@ -1139,7 +1155,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | 3 | 注释与建模：BAKTA(+guard) / CARVEME / MEMOTE | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；真实运行通过——**AMR-guard 在 O157:H7（SRR10194530）触发并成功兜底**（日志见 `[amr-guard] WARNING ... retrying chunk-wise`，bakta.tsv 完整产出）；**CarveMe 不覆盖 Bakta TSV**（坑位 #5：bakta tsv 首行 `# Annotated with Bakta` 完好，diamond 表落在 carveme 目录）；MEMOTE 评分 SRR1770413=68.0 / SRR10194530=67.7（**数值更正 2026-10-15**：原始分为 0.680641 / 0.677781，管线自己的表格四舍五入为 **68.1 / 67.8**，此处 68.0 / 67.7 系截断；且该总分只覆盖 consistency + annotation 两类，biomass/basic 组**权重为 0**——详见 F25） |
 | 4 | 报告：MULTIQC + task_env 计时 | ✅ **完成（2026-10-14）**：custom content 6 个 TSV（carveme_modelstats/summary、memote_score/summary、pipeline_runtime、quast_generalstats）齐全；`benchmarks/` 含 multiqc.tsv + 22 个 per-sample 计时 TSV；报告内恰 2 个样本（cohort=样本表，不扫目录）。**排版（F21，用户要求）**：章节与 General Stats 列均按管线顺序（FastQC→QUAST→BUSCO→CarveMe→MEMOTE→耗时→版本），并把 MEMOTE 完整 `index.html` 以独立 iframe 内嵌进报告（报告 4.9 MB → 15.2 MB）。注：因 F19/F20，报告最终以与 process 完全一致的命令手动生成（见 §12.1 F20/F21） |
 | 5 | 全量对拍（阶段 B/C）+ 回写文档 + readme 补充 Nextflow 运行说明 | 对拍表全部通过 |
-| 6 | 防御性加固：磁盘硬预检（F22/D13）+ 每次 push 的 CI 回归守卫（阶段 D/D14）+ 单样本失败注入实测（F23/D12） | ✅ **完成（2026-10-14）**：预检三分支实测（满足/不满足/关闭）且不满足时在任何任务前中止；CI 3 个 job 全绿（lint 0 error + 告警棘轮、`-preview` + 6 坏样本表、F22 三分支、23 任务 stub 干跑 + 产物契约 + 根产物零改写、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照）；单样本失败从"未验证限制"变为"实测语义"，并更正了 `finish` ≠ `--keep-going` 的旧表述 |
+| 6 | 防御性加固：磁盘硬预检（F22/D13）+ 每次 push 的 CI 回归守卫（阶段 D/D14）+ 单样本失败注入实测（F23/D12） | ✅ **完成（2026-10-14）**：预检三分支实测（满足/不满足/关闭）且不满足时在任何任务前中止；CI 3 个 job 全绿（lint 0 error + 告警棘轮、`-preview` + 6 坏样本表、F22 三分支、23 任务 stub 干跑 + 产物契约 + 根产物零改写、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照）；单样本失败从"未验证限制"变为"实测语义"，并更正了 `finish` ≠ `--keep-going` 的旧表述。**（更正 2026-10-15：本行原称"CI 3 个 job 全绿"，但该仓库当时从未跑过 workflow——那是本地脚本的结论，而本地绿 ≠ CI 绿；首次真实 CI 运行 3/4 job 红，根因与对策见 F28/D18。CI 现为 4 个 job。）** |
 
 **开放问题：**
 1. 复用资产副本的同步机制：手动同步（记录来源 commit）还是 git submodule？（实施时定）

@@ -41,10 +41,19 @@ if ! command -v "${PYTHON}" >/dev/null 2>&1; then
     echo "${PYTHON} is not on PATH -- this check runs the growth checker directly" >&2
     exit 2
 fi
-if ! "${PYTHON}" -c 'import cobra' >/dev/null 2>&1; then
-    echo "python3 cannot import cobra -- install it (pip install cobra) or point PYTHON"
-    echo "at an environment that has it, e.g.:"
-    echo "  PYTHON=.nextflow/conda/<env>/bin/python3 bash tests/ci/run-growth-check.sh" >&2
+# Check BOTH imports up front. The first real CI run of this job installed cobra
+# but not PyYAML (cobra does not depend on it), so `check_growth.py` died on
+# `import yaml` and the script reported 13 confusing assertion failures -- a
+# crash dressed up as check results. Fail loudly and say what to install.
+if ! "${PYTHON}" -c 'import cobra, yaml' >/dev/null 2>&1; then
+    missing=$("${PYTHON}" -c '
+import importlib
+print(", ".join(m for m in ("cobra", "yaml") if importlib.util.find_spec(m) is None) or "unknown")' 2>/dev/null || echo "cobra and/or yaml")
+    echo "python3 is missing: ${missing}" >&2
+    echo "this check needs cobra (for FBA) and PyYAML (for the medium definition):" >&2
+    echo "  pip install cobra pyyaml" >&2
+    echo "or point PYTHON at an environment that has both, e.g.:" >&2
+    echo "  PYTHON=.nextflow/conda/<memote env>/bin/python3 bash tests/ci/run-growth-check.sh" >&2
     exit 2
 fi
 

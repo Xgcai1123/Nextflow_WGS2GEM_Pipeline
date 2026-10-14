@@ -111,6 +111,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: the first real workflow run failed in three of four jobs.** Two causes were
+  environmental, one was a claim this project should not have made:
+  - **The runner has 2 CPUs**, while `nextflow.config` declares 4–8 for the real tools, so
+    Nextflow refused to schedule anything (`Task requirement exceeds available CPUs -- req: 4;
+    avail: 2`). The smoke job published no artifacts at all (65 artifact assertions then failed
+    in a cascade) and both inner runs of the failure-isolation job died the same way, which its
+    assertions reported as a broken injection and a broken `-resume`. Fixed in
+    `tests/ci/ci.config` with `process { resourceLimits = [cpus: 1] }` — a single ceiling that
+    also covers processes added later, rather than an explicit list that would rot.
+  - **`pip install cobra` does not install PyYAML**, which `check_growth.py` needs for the medium
+    definition, so the new growth job died on `import yaml` — and reported it as **13 mutually
+    contradictory check failures**, a crash dressed up as check results. The job now installs
+    `cobra pyyaml`, and `run-growth-check.sh` pre-checks *both* imports and exits 2 with the exact
+    install command instead of producing misleading assertions.
+  - **Correction: the design document claimed "CI 3 jobs green" on 2026-10-14.** That was never
+    verified on GitHub — the repository had **no workflow run at all** before this one; the claim
+    came from running the scripts locally, and local green is not CI green. The claim is corrected
+    in place with a pointer to F28, and verification now means reading the run result back from
+    GitHub. CI is four jobs.
+  Verified locally by forcing the failure: a probe overlay setting `FASTQC_RAW` to `cpus = 999`
+  reproduces the refusal (`req: 999; avail: 8`), and layering `ci.config` after it submits all 24
+  tasks; the growth check passes with both dependencies and exits 2 with a clear message when
+  PyYAML is absent (checked in a clean environment that has neither).
+
 - **The report's two disagreeing reaction counts are now explained where they appear.** The
   CarveMe table reads its counts from the SBML file (2486 / 2478), while MEMOTE reports them
   after cobra loads the model (2496 / 2488) — because cobra **creates an exchange reaction**

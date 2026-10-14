@@ -84,8 +84,8 @@ row-specific message.
 
 The repository ships a check suite — no conda environment is built and no tool is executed (the
 eleven processes run from their `stub:` blocks, and the embedding check calls the two helper
-scripts directly). Only the last line needs a python with `cobra`; the rest need nothing but
-Nextflow:
+scripts directly). Only the last line needs a python with `cobra` and `PyYAML`; the rest need
+nothing but Nextflow:
 
 ```bash
 bash tests/ci/run-embed-check.sh           # MEMOTE / QUAST section scripts (no Nextflow needed)

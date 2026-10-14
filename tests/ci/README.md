@@ -37,7 +37,7 @@ assertion. They are independent and can be run in any order.
 
 | Path | Role |
 |---|---|
-| `ci.config` | Nextflow config overlay for every check: redirects all output/log/benchmark dirs and `workDir` under `tests/ci/out/`, and disables conda. Nothing a check does can touch validated data. |
+| `ci.config` | Nextflow config overlay for every check: redirects all output/log/benchmark dirs and `workDir` under `tests/ci/out/`, disables conda, and clamps CPUs (`process.resourceLimits = [cpus: 1]`). Nothing a check does can touch validated data, and the clamp is what lets the stub DAG run on a 2-CPU CI runner at all (F28). |
 | `inject-sample-failure.config` | Fails `FASTQC_RAW` for one sample (`CI_FAIL_SAMPLE`, default `CI_B`) through `beforeScript`, so `main.nf` carries no test hook. |
 | `ignore-strategy.config` | Negative control for the rejected `errorStrategy = 'ignore'`. |
 | `fixtures/` | Two-sample sheet with tiny synthetic gzipped FASTQ reads and a `bakta_db/version.json` sentinel; plus `quast/` and `memote/` — minimal stand-ins for a QUAST `report.html`/`report.txt` and a MEMOTE `index.html` (including its `<base href="/">`), each seeded with the characters that break naive escaping. |
@@ -51,11 +51,12 @@ assertion. They are independent and can be run in any order.
   0.3 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s, `run-growth-check.sh` 12 s,
   `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s, `run-preview.sh` 33 s.
 - `run-growth-check.sh` is the **one check that is not tool-free**: it needs `cobra` to solve
-  flux balance problems, so its CI job runs `pip install cobra` (which brings the GLPK solver
-  `swiglpk` as a hard dependency). Locally, point `PYTHON` at the pipeline's memote environment,
-  which already has it. It generates its own synthetic model instead of committing one: the toy
-  is plumbing, not data, and a fake biological model under `fixtures/` invites being mistaken
-  for one.
+  flux balance problems and `PyYAML` to read the medium definition, so its CI job runs
+  `pip install cobra pyyaml` (cobra brings the GLPK solver `swiglpk`; it does **not** bring
+  PyYAML, which is what broke this job on its first real CI run — F28). Locally, point `PYTHON`
+  at the pipeline's memote environment, which already has both. It generates its own synthetic
+  model instead of committing one: the toy is plumbing, not data, and a fake biological model
+  under `fixtures/` invites being mistaken for one.
 - The negative controls here matter more than the positive case. A checker that only ever
   reports "ok" is indistinguishable from a checker that does nothing, so each guard is proven
   to *fire*: a medium component with no exchange reaction, a window no model could satisfy, and
