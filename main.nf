@@ -499,7 +499,7 @@ workflow {
     )
 
     onComplete:
-    log.info "[WGSpipeline-nf] workflow dir = ${params.project_dir}"
-    log.info "[WGSpipeline-nf] report       = ${params.multiqc_dir}/${params.report_name}.html"
-    log.info "[WGSpipeline-nf] rerun a step = nextflow run . -resume (delete the output to force it)"
+    log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] workflow dir = ${params.project_dir}"
+    log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] report       = ${params.multiqc_dir}/${params.report_name}.html"
+    log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] rerun a step = nextflow run . -resume (delete the output to force it)"
 }

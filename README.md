@@ -167,6 +167,33 @@ docs/                       design document, asset provenance, audit notes
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
 ```
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The current
+version is declared once, in the `manifest` block of `nextflow.config`:
+
+```groovy
+manifest {
+    name            = 'NextFlow-WGS2GEM'
+    version         = '0.1.0'
+    nextflowVersion = '>=25.10.0'
+}
+```
+
+Conventions:
+
+- every user-visible change is recorded in [CHANGELOG.md](CHANGELOG.md)
+  ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format);
+- releases are tagged `v<major>.<minor>.<patch>` (e.g. `v0.1.0`);
+- the pipeline prints its own version at the end of every run, and exposes it to the
+  workflow as `workflow.manifest.version`;
+- `nextflowVersion` is enforced, so an unsupported Nextflow fails fast instead of
+  producing subtly different output.
+
+While the major version is `0`, the interface (parameters, output layout) may still change
+in a minor release; the per-sample output directory layout is nonetheless kept identical to
+the original Snakemake implementation.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
