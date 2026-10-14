@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Removed
+
+- The presentation deck and its generator script
+  (`WGSpipeline_Nextflow_Migration.pptx`, `WGSpipeline_Nextflow_Migration.pdf`,
+  `build_ppt.py`) were dropped from the repository: they are outreach material rather
+  than pipeline code. They are still retrievable from the `v0.1.0` tag.
 
 ## [0.1.0] - 2026-10-14
 
