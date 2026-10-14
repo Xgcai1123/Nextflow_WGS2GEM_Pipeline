@@ -1,0 +1,1075 @@
+# WGSpipeline → Nextflow 移植 · 详细设计文档
+
+| 项 | 值 |
+|---|---|
+| 版本 | v1.2（里程碑 0–4 完成，M5 对拍结论已回写） |
+| 日期 | 2026-10-14 |
+| 源管线 | `../WGSpipeline`（Snakemake，10 步；相对本仓库根目录） |
+| 目标项目 | 本仓库（Nextflow DSL2） |
+| 状态 | **已实施并验证**：里程碑 0–4 完成，产物与源仓库逐字节/数值对拍通过（见 §10 耗时对比、§17 里程碑表、§18 审查结论） |
+
+---
+
+## 1. 背景与目标
+
+WGSpipeline 是一条细菌全基因组测序（WGS）管线，由单一 `snakefile` 驱动：
+
+```
+FastQC → Trimmomatic → FastQC → SPAdes → QUAST → BUSCO → Bakta → CarveMe → MEMOTE → MultiQC
+```
+
+本设计将整条管线移植到 Nextflow（DSL2），目标：
+
+1. **功能 1:1 对等**——10 个步骤、输出目录树、报告行为全部一致；
+2. **零改动复用关键资产**——8 个 conda 环境、`multiqc_extras.py`、`memote_report.py`、bakta AMR-guard 包装器、`multiqc_config.yaml` 原样复用；
+3. **行为语义对等**——cohort 严格等于样本表、`report_tag` 多报告并存、单样本失败不拖垮其余样本（对应 `--keep-going`）、断点续跑（对应 Snakemake 缓存）；
+4. **历史坑位全部保留对策**——CarveMe 覆盖 Bakta TSV、QUAST `--labels`、FastQC 假失败兜底、AMRFinderPlus 崩溃 guard 等（详见 §8 各 process 的"坑位"小节）。
+
+## 2. 范围与非目标
+
+**范围内：**
+- Nextflow 版完整 10 步管线（DSL2，单 `main.nf` + `nextflow.config`，镜像"单一 snakefile"约定）；
+- conda 执行后端（8 个 env yaml 原样复用，macOS/arm64 的四个 workaround 自动保留）；
+- 样本表解析期校验、`report_tag`、耗时 benchmark 表、日志目录布局；
+- 与现有 Snakemake 产物的对拍验证方案。
+
+**非目标（明确不做）：**
+- 不重推导 macOS/arm64 环境 workaround（BUSCO 5.8.3 / QUAST pip / SPAdes 4.0.0 / pyhmmer 0.10.15 pin）——随 env yaml 原样迁移；
+- 不引入 Docker/Singularity（后续可作为独立 profile 追加）；
+- 不改线程数字（**决策 D2**：保持原声明——`carveme` 声明 4 实际单线程、`spades` 声明 8 等一律原样）；
+- 不改 `multiqc_config.yaml`、`multiqc_extras.py`、`memote_report.py` 的功能（`multiqc_extras.py` 对 benchmark 目录的读取契约保持不变，见 §10）；
+- 不迁移 `raw/`、`db/` 数据（默认以参数指回原仓库，见 §3、§5）。
+
+## 3. 新项目布局
+
+新目录 `WGSpipeline-nextflow/` 与 `WGSpipeline/` 平级，是**独立项目**（自有 `work/`、自有输出目录树）。复用资产以**字节一致副本**形式纳入新仓库，与数据类资产（大文件）分离：
+
+```
+WGSpipeline-nextflow/
+├── main.nf                     # DSL2：解析期校验 + 10 个 process + workflow + onComplete
+├── nextflow.config             # params / process / conda / profiles / workDir
+├── samples.tsv                 # 队列样本表（自有一份，初始内容与原仓库一致）
+├── multiqc_config.yaml         # 复用副本（字节一致）
+├── multiqc_nextflow.yaml       # 新增：MultiQC 排版覆盖层（章节/列顺序 + MEMOTE 内嵌，F21）
+├── envs/                       # 复用副本：8 个 conda env yaml（字节一致）
+│   ├── fastqc.yaml  trimmomatic.yaml  spades.yaml  quast.yaml
+│   ├── busco.yaml   bakta.yaml  carveme.yaml  memote.yaml
+├── scripts/                    # 复用副本（字节一致）+ 少量新增
+│   ├── multiqc_extras.py
+│   ├── memote_report.py
+│   ├── memote_html_section.py  # 新增：把 MEMOTE HTML 包成 MultiQC 内嵌段（F21）
+│   ├── bin/bakta               # AMR-guard 包装器入口
+│   └── amr_guard/amr_chunk_guard.py
+├── bin/
+│   └── task_env.sh             # 新增：任务内计时 helper（§10）
+├── docs/
+│   ├── nextflow-port-design.md # 本文档
+│   └── asset-sources.md        # 复用资产来源 commit + sha256（决策 D4）
+├── m0probe/                     # M0 验证探针（main.nf + config + 假 fastq，26.x 语法回归复测用）
+├── .gitignore                  # 见下
+├── work/                       # Nextflow workDir（运行时生成，gitignore）
+├── .nextflow/                  # conda cacheDir + 运行缓存（gitignore）
+└── data/ assembly/ annotation/ models/ reports/ logs/ benchmarks/
+                                # 输出目录树，与 Snakemake 完全一致（运行时生成）
+```
+
+**`.gitignore` 草案：**
+
+```
+work/
+.nextflow/
+.nf-nextflow/
+data/
+assembly/
+annotation/
+models/
+reports/
+logs/
+benchmarks/
+.DS_Store
+```
+
+**默认数据指向（`nextflow.config` 的 params）：**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `raw_dir` | `../WGSpipeline/raw` | 原始 fastq（相对 samples.tsv 的 fq 路径解析基准） |
+| `bakta_db` | `../WGSpipeline/db/bakta/db-light` | Bakta 6.0 light 库 |
+| `busco_db` | `../WGSpipeline/db/busco` | BUSCO 谱系缓存 |
+
+三者均可命令行覆盖。**复用副本的同步策略**：`envs/`、`scripts/`、`multiqc_config.yaml` 在移植时与原仓库字节一致，并在 `docs` 里记录来源 commit；后续上游改动需手动同步（或改为 git submodule，实施时再定）。
+
+## 4. 路径锚定（对应 `wfpath()` 的教训）
+
+Snakemake 版的核心教训：shell 命令在**调用目录**执行，仓库内相对路径必须锚定。Nextflow 同样存在两组目录：
+
+| 概念 | 含义 | 对应 |
+|---|---|---|
+| `projectDir`（`$projectDir`） | `main.nf` 所在目录 | `BASE_DIR` / `wfpath()` |
+| `launchDir`（`$launchDir`） | `nextflow run` 的调用目录 | 调用目录，**不可依赖** |
+
+**规则：所有仓库内路径（samples.tsv、scripts、envs、multiqc_config、logs、benchmarks、输出目录）一律用 `$projectDir` 锚定；task 的写入一律落到 `$projectDir` 下的绝对路径。** 实现方式：`nextflow.config` 顶部统一用 `projectDir` 展开成 `params.*` 绝对路径（§12），process 脚本里只引用 `params.*`，不出现裸相对路径。
+
+## 5. 参数设计（config key → params 映射）
+
+Snakemake 的 `config:` 键与 Nextflow `params` 一一对应，**同名保留**，便于文档与肌肉记忆迁移：
+
+| Snakemake config | Nextflow param | 默认值 | 说明 |
+|---|---|---|---|
+| `threads_default` | `params.threads_default` | `8` | CPU 密集步骤（trimmomatic/spades） |
+| `carveme_solver` | `params.carveme_solver` | `scip` | gurobi/cplex 需授权 |
+| `memote_solver` | `params.memote_solver` | `glpk` | cobra 求解器 |
+| `busco_lineage` | `params.busco_lineage` | `enterobacterales_odb10` | 改它会改变 BUSCO 产物路径 |
+| `bakta_db` | `params.bakta_db` | `../WGSpipeline/db/bakta/db-light` | 见 §3 |
+| `quast_min_contig` | `params.quast_min_contig` | `0` | 0 = 统计全部 contig |
+| `raw_dir` | `params.raw_dir` | `../WGSpipeline/raw` | fq 相对路径解析基准 |
+| `samples_tsv` | `params.samples_tsv` | `$projectDir/samples.tsv` | Snakemake 版为 `config.get("samples_tsv", ...)` |
+| `report_tag` | `params.report_tag` | `""` | `""` → `multiqc_report.html`；`cohortB` → `multiqc_report_cohortB.html` |
+| `trimmomatic.*` | `params.trim.*` | leading=3, trailing=3, slidingwindow="4:20", minlen=36 | 嵌套 dict → 嵌套 params |
+| `trimmomatic_adapters` | `params.trimmomatic_adapters` | `""`（空 = 用 `$CONDA_PREFIX` 内自带） | fallback 顺序见 §8.2 |
+| （spades `--careful`） | `params.spades_careful` | `"--careful"` | 原 snakefile 为 params.careful，`""` 关闭 |
+| `--set-threads <rule>=N` | `-profile` 或 config override（`process.withName`） | 见 §12 | 语义对等物 |
+| `--keep-going` | `process.errorStrategy = 'finish'` | 见 §12 | 语义对等物 |
+| `--latency-wait 60` | N/A | — | Snakemake/APFS 特有问题，Nextflow 无对应物 |
+| `--forcerun <rule>` | `-resume` + 删除对应产物（或改输入触发 hash 变化） | 见 §13 | 语义不同，覆盖同一需求 |
+
+优先级：CLI `--key=value` > `nextflow.config` 默认值 > main.nf 内 `?:` 兜底（与原"CLI > config > 代码默认"一致）。Snakemake 的"`--config` 值是字符串需显式 int 转换"陷阱在 Nextflow 不存在（params 保留类型，`--threads_default 8` 即为 int）。
+
+## 6. 样本表解析与校验（main.nf 解析期）
+
+原 snakefile 在解析期用 pandas 校验样本表，**坏输入立即失败而非跑到一半才炸**。Nextflow 在 `main.nf` 顶层用 Groovy 实现同等校验：
+
+```groovy
+// ---- sample sheet: parse + validate at parse time (mirrors the snakefile) ----
+def sheet_file = file(params.samples_tsv)
+if (!sheet_file.exists()) { error "samples.tsv not found: ${sheet_file}" }
+
+def sheet_lines = sheet_file.readLines()
+def header      = sheet_lines[0].split('\t', -1)*.trim()
+def REQUIRED    = ['sample', 'fq1', 'fq2']
+def missing     = REQUIRED.findAll { !header.contains(it) }
+if (missing) { error "samples.tsv: missing required column(s): ${missing}; found: ${header}" }
+
+def SAMPLES     = [:]                 // LinkedHashMap: name -> [fq1, fq2, meta...]
+def META_COLS   = header - REQUIRED
+def name_re     = ~/[A-Za-z0-9._-]+/  // sample name becomes a path component
+def resolve     = { fq, row ->        // F11: hoisted + untyped + .call() (strict parser)
+    def p = fq.startsWith('/') ? fq : "${params.raw_dir}/${fq}"
+    if (!file(p).exists()) {
+        error "samples.tsv: row ${row}: fastq not found: ${p}"
+    }
+    p
+}
+
+sheet_lines[1..-1].eachWithIndex { line, idx ->
+    if (line.trim().isEmpty()) { return }            // skip blank lines
+    def cols = line.split('\t', -1)*.trim()
+    if (cols.size() != header.size()) {
+        error "samples.tsv: row ${idx + 2}: expected ${header.size()} fields, got ${cols.size()}"
+    }
+    def rec  = [header, cols].transpose().collectEntries()
+    def name = rec.sample
+    if (!name || !name_re.matcher(name).matches()) {
+        error "samples.tsv: row ${idx + 2}: invalid sample name ${name}"
+    }
+    if (SAMPLES.containsKey(name)) { error "samples.tsv: duplicate sample name ${name}" }
+    SAMPLES[name] = [resolve.call(rec.fq1, idx + 2), resolve.call(rec.fq2, idx + 2)] + META_COLS.collect { rec[it] }
+}
+def SAMPLE_NAMES = SAMPLES.keySet() as List
+
+// report_tag: same filename-safety check as the snakefile
+def tag_re = ~/[A-Za-z0-9._-]+/
+if (params.report_tag && !tag_re.matcher(params.report_tag).matches()) {
+    error "report_tag ${params.report_tag} may only use letters, digits, dot, underscore and dash"
+}
+params.report_name = "multiqc_report" + (params.report_tag ? "_${params.report_tag}" : "")
+```
+
+**M0 实测修正（F1，26.x 严格语法）：** 顶层语句与 process/workflow 声明不可混排——上面整段校验代码必须移入 `workflow { main: ... }` 块的最前面（任何 process 调用之前）。实测 `error "..."` 在 workflow 内可用、坏输入立即失败；`-preview`/`-stub` 都会执行 workflow 语句，校验同样生效。校验时机从"脚本解析期"变为"workflow 启动期"，fail-fast 语义不变（仍早于任何任务执行）。
+
+行为对齐点：列检查、样本名正则（字母数字点下划线连字符）、重复名、fq 相对路径按 `raw_dir` 解析、空路径、文件存在性、坏行号报错信息——与 snakefile 逐条一致。元数据列保留但不参与 DAG（与现状一致）。
+
+## 7. 通道与数据流
+
+```
+samples.tsv ──解析期校验──▶ SAMPLES(map) / SAMPLE_NAMES(list)
+                                │
+                    Channel.of(SAMPLE_NAMES) → tuple(sample, fq1, fq2)
+                                │
+        ┌───────────────────────┼───────────────────────────────┐
+        │ flatMap → (sample,read,fq)        │                   │
+        ▼                                    ▼                   │
+  FASTQC_RAW (read=1/2)              TRIMMOMATIC                │
+        │                                    │ 4 个 paired/unpaired 输出
+        │ flatMap(paired 1/2) ◄──────────────┤
+        ▼                                    ▼
+  FASTQC_TRIMMED                          SPADES
+        │                                    │ contigs.fasta
+        │                              ┌─────┼──────────┐
+        │                              ▼     ▼          ▼
+        │                            QUAST  BUSCO      BAKTA
+        │                              │     │          │ faa
+        │                              │     │          ▼
+        │                              │     │        CARVEME
+        │                              │     │          │ xml
+        │                              │     │          ▼
+        │                              │     │        MEMOTE
+        │                              │     │          │ summary
+        ▼                              ▼     ▼          ▼
+   ──────────── 显式 per-sample 文件（zip / report.tsv / txt / xml / summary）────────────
+        │ 各自 .collect() 为列表（report 的 cohort = 这张样本表，绝不扫目录）
+        ▼
+     MULTIQC（val SAMPLE_NAMES + 各文件列表）──▶ reports/multiqc/multiqc_report[_tag].html
+```
+
+workflow 主干（DSL2）：
+
+```groovy
+workflow {
+    main:
+    // M0 修正（F1）：§6 的样本表校验代码放在这里（main: 节最前、任何 process 调用之前）
+    // M1 修正（F12）：Channel.fromList —— 26.x 的 Channel.of(collection) 不再拆列表元素
+    sample_ch = Channel.fromList(SAMPLE_NAMES).map { n ->
+        tuple(n, file(SAMPLES[n][0]), file(SAMPLES[n][1]))
+    }
+
+    FASTQC_RAW(sample_ch.flatMap { n, f1, f2 -> [tuple(n, '1', f1), tuple(n, '2', f2)] })
+
+    TRIMMOMATIC(sample_ch)
+    FASTQC_TRIMMED(TRIMMOMATIC.out.flatMap { n, r1p, r2p, r1u, r2u ->
+        [tuple(n, '1', r1p), tuple(n, '2', r2p)]
+    })
+
+    SPADES(TRIMMOMATIC.out.map { n, r1p, r2p, r1u, r2u -> tuple(n, r1p, r2p) })
+    QUAST(SPADES.out)
+    BUSCO(SPADES.out)
+    BAKTA(SPADES.out.map { n, contigs ->
+        tuple(n, contigs, file("${params.bakta_db}/version.json"))   // db-upgrade sentinel
+    })
+    CARVEME(BAKTA.out.map { n, gff3, faa, tsv, ffn, gbff, txt -> tuple(n, faa) })
+    MEMOTE(CARVEME.out.map { n, xml, faa, tsv -> tuple(n, xml) })
+
+    MULTIQC(
+        Channel.value(SAMPLE_NAMES),                          // staging loop 遍历的 cohort
+        Channel.empty()
+            .mix(FASTQC_RAW.out.map    { n, r, z, h -> z })
+            .mix(FASTQC_TRIMMED.out.map{ n, r, z, h -> z })
+            .mix(QUAST.out.map         { n, html, txt, tsv -> tsv })
+            .collect(),                                       // 显式 QC 文件列表（不扫目录）
+        BUSCO.out.map { n, j, t -> t }.collect(),             // short_summary txt
+        CARVEME.out.map { n, xml, faa, tsv -> xml }.collect(),
+        MEMOTE.out.map { n, html, json, tsv -> tsv }.collect(),
+        Channel.of(file(params.multiqc_config)).collect()
+    )
+
+    // M0 修正（F2）：26.x 用块内 onComplete: 节（失败退出时同样执行）
+    onComplete:
+    log.info "[WGSpipeline-nf] workflow dir = ${params.project_dir}"
+    log.info "[WGSpipeline-nf] report       = ${params.multiqc_dir}/${params.report_name}.html"
+    log.info "[WGSpipeline-nf] rerun a step = nextflow run . -resume (delete the output to force it)"
+}
+```
+
+要点：
+- **M0 实测修正（F2）**：26.x 已移除 `workflow.onComplete { }` 处理器；上文代码块已改为块内 `onComplete:` 节（注意：一旦出现 `onComplete:`/`onError:` 节，`main:` 标签不可省略）；`onComplete:` 节在失败退出时同样执行；
+- **QUAST/BUSCO/BAKTA 都只消费 `SPADES.out` 的 `(sample, contigs)`**——与 snakefile 中三者并行于 spades 之后一致；
+- BAKTA 额外带 `db/version.json` 作为 staged input：库升级 → input hash 变化 → `-resume` 自动重跑注释（Snakemake 版用同一 sentinel 触发 provenance）；
+- MultiQC 的队列范围 = 通道里实际存在的样本 = 样本表，与 Snakemake"显式 per-sample 文件而非目录扫描"纪律一致（§9）。
+
+## 8. 各 process 详细设计
+
+通用约定（每个 process 的 script 前四行与最后一行）：
+
+```sh
+source ${params.bin_dir}/task_env.sh
+export BENCH_DIR=${params.bench_dir}
+bench_start
+mkdir -p ${params.logs_dir}/<step>      # 有日志的步骤
+... 主命令 ...
+bench_finish <step> <sample或"">        # 见 §10
+```
+
+所有工具在 task 的私有 workdir 内执行（输出写到 `out/` 子目录或当前目录），再由 `publishDir` 发布到仓库目录——**Snakemake 版的 `rm -rf outdir` 幂等技巧在 Nextflow 里天然由"每次任务全新 workdir + publish 覆盖"替代**，无需再 rm（BAKTA 例外保留 `--force`，见 §8.7）。
+
+**M0 实测修正（F3，publishDir 写法）：** 26.x 下 `publishDir "${dir}/${sample}"` 字符串形式在解析期报 `No such variable`；引用 input 变量的各 process（§8.3–8.8）一律改闭包形式 `publishDir(path: { "${dir}/${sample}" }, ...)`，实测按样本正确发布到独立目录。不引用 input 变量的 publishDir（如 §8.1 FASTQC、§9 MULTIQC）字符串形式不受影响。**M2 实测修正（F15）：** `pattern` 不会剥离匹配前缀——`out/contigs.fasta` 会发布成 `<目标>/out/contigs.fasta`，多出一层 `out/`；所有"工具写 out/ 子目录"的 process（§8.3–8.8）必须加 `saveAs: { filename -> filename - 'out/' }` 去前缀（pattern 用 `out/**`）。
+
+---
+
+### 8.1 FASTQC_RAW / FASTQC_TRIMMED
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/fastqc.yaml`（fastqc 0.12.1 + multiqc 1.21） |
+| cpus | 4（与 snakefile 一致） |
+| publish | `data/qc/raw`（RAW）/ `data/qc/trimmed`（TRIMMED），mode: copy |
+| 输入 | `tuple(sample, read, fq)`；TRIMMED 的 fq 为 `<sample>_R<read>_paired.fastq.gz` |
+| 输出 | `tuple(sample, read, zip, html)` |
+
+```groovy
+process FASTQC_RAW {
+    tag { "${sample}_${read}" }
+    conda "${params.envs_dir}/fastqc.yaml"
+    cpus 4
+    publishDir "${params.raw_qc_dir}", mode: 'copy', overwrite: true
+
+    input:  tuple val(sample), val(read), path(fq)
+    output: tuple val(sample), val(read),
+            path("${sample}_${read}_fastqc.zip"), path("${sample}_${read}_fastqc.html")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/fastqc_raw
+    fastqc ${fq} -o . --threads ${task.cpus} \\
+        > ${params.logs_dir}/fastqc_raw/${sample}_${read}.log 2>&1 \\
+        || [ -f ${sample}_${read}_fastqc.html ]
+    bench_finish fastqc_raw ${sample}_${read}
+    """
+}
+```
+
+FASTQC_TRIMMED 同构，输出名 `<sample>_R<read>_paired_fastqc.{zip,html}`，log 目录 `fastqc_trimmed`，benchmark step `fastqc_trimmed`。
+
+**坑位（保留）：** fastqc 0.12 在 macOS 下偶发"产物已写出但退出码非 0"——`|| [ -f <html> ]` 兜底原样保留；真正失败（无产物）时 shell 仍非 0，Nextflow 会捕获。
+**对齐点：** input 文件名即 fastqc 输出前缀的来源（`<sample>_<read>.fastq.gz` → `<sample>_<read>_fastqc.*`），staging 不改名即可与 Snakemake 输出名一致。
+
+### 8.2 TRIMMOMATIC
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/trimmomatic.yaml`（trimmomatic 0.39 + openjdk 17） |
+| cpus | `params.threads_default`（8） |
+| publish | `data/clean_trimmomatic` |
+| 输入 | `tuple(sample, fq1, fq2)` |
+| 输出 | `tuple(sample, r1_paired, r2_paired, r1_unpaired, r2_unpaired)` |
+
+```groovy
+process TRIMMOMATIC {
+    tag "${sample}"
+    conda "${params.envs_dir}/trimmomatic.yaml"
+    cpus params.threads_default
+    publishDir "${params.trim_dir}", mode: 'copy', overwrite: true
+
+    input:  tuple val(sample), path(fq1), path(fq2)
+    output: tuple val(sample),
+            path("${sample}_R1_paired.fastq.gz"),    path("${sample}_R2_paired.fastq.gz"),
+            path("${sample}_R1_unpaired.fastq.gz"),  path("${sample}_R2_unpaired.fastq.gz")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/trimmomatic
+
+    # Adapter file: param wins (snakefile semantics), fall back to the copy
+    # shipped in the conda env. NOTE (F10): shell vars in script strings use
+    # single-backslash escaping — "\\$" would trigger Groovy interpolation.
+    ADAPTERS="${params.trimmomatic_adapters}"
+    [ -n "\$ADAPTERS" ] || ADAPTERS="\${CONDA_PREFIX}/share/trimmomatic/adapters/TruSeq3-PE.fa"
+
+    trimmomatic PE -threads ${task.cpus} -phred33 ${fq1} ${fq2} \\
+        ${sample}_R1_paired.fastq.gz ${sample}_R1_unpaired.fastq.gz \\
+        ${sample}_R2_paired.fastq.gz ${sample}_R2_unpaired.fastq.gz \\
+        ILLUMINACLIP:\$ADAPTERS:2:30:10 \\
+        LEADING:${params.trim.leading} TRAILING:${params.trim.trailing} \\
+        SLIDINGWINDOW:${params.trim.slidingwindow} MINLEN:${params.trim.minlen} \\
+        > ${params.logs_dir}/trimmomatic/${sample}.log 2>&1
+    bench_finish trimmomatic ${sample}
+    """
+}
+```
+
+**对齐点：** 参数值与原 snakefile 完全一致（phred33、ILLUMINACLIP:2:30:10、LEADING:3、TRAILING:3、SLIDINGWINDOW:4:20、MINLEN:36）。unpaired 输出保留（不参与组装，与原版一致）。**M1 修正（决策 D11）：** adapter 优先级按 snakefile 语义为"param 优先、空则 `$CONDA_PREFIX` 自带"（原草案的 env-first 顺序与源行为相反，已改）。
+
+### 8.3 SPADES
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/spades.yaml`（spades 4.0.0，osx-arm64 workaround） |
+| cpus | `params.threads_default`（8） |
+| publish | `assembly/spades/<sample>/`（pattern `out/*`） |
+| 输入 | `tuple(sample, r1_paired, r2_paired)` |
+| 输出 | `tuple(sample, path("out/contigs.fasta"))` |
+
+```groovy
+process SPADES {
+    tag "${sample}"
+    conda "${params.envs_dir}/spades.yaml"
+    cpus params.threads_default
+    publishDir(path: { "${params.assembly_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15
+
+    input:  tuple val(sample), path(r1_paired), path(r2_paired)
+    output: tuple val(sample), path("out/contigs.fasta")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/spades
+    mkdir -p out
+    spades.py -1 ${r1_paired} -2 ${r2_paired} -o out \\
+        --threads ${task.cpus} ${params.spades_careful} \\
+        > ${params.logs_dir}/spades/${sample}.log 2>&1
+    bench_finish spades ${sample}
+    """
+}
+```
+
+**对齐点：**
+- `contigs.fasta` 为管线终点；scaffolds/assembly_graph 等随 `out/` 一并 publish（与"SPAdes 侧产物随 -o 目录产出"一致）；
+- `--careful` 保留（约 +30% 耗时；`--spades_careful ''` 关闭）；
+- Snakemake 的 `rm -rf` 由全新 workdir 替代（SPAdes 拒绝已存在目录的报错不会再触发）。
+
+### 8.4 QUAST
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/quast.yaml`（python 3.10 + pip quast 5.2.0，osx-arm64 workaround） |
+| cpus | 1（macOS 上多线程偶发不稳，与原版一致） |
+| publish | `data/qc/quast/<sample>/`（pattern `out/*`） |
+| 输入 | `tuple(sample, contigs)` |
+| 输出 | `tuple(sample, report.html, report.txt, report.tsv)` |
+
+```groovy
+process QUAST {
+    tag "${sample}"
+    conda "${params.envs_dir}/quast.yaml"
+    cpus 1
+    publishDir(path: { "${params.quast_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15
+
+    input:  tuple val(sample), path(contigs)
+    output: tuple val(sample), path("out/report.html"), path("out/report.txt"), path("out/report.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/quast
+    mkdir -p out
+    quast.py ${contigs} -o out \\
+        --labels ${sample} \\
+        --min-contig ${params.quast_min_contig} \\
+        --threads 1 > ${params.logs_dir}/quast/${sample}.log 2>&1
+    bench_finish quast ${sample}
+    """
+}
+```
+
+**坑位（两条都保留）：**
+1. **`--labels ${sample}` 必须保留**——输入恒为 `contigs.fasta`，否则所有样本在 QUAST/MultiQC 里都叫 "contigs" 互相覆盖（known-issues 相关注释）；
+2. **入口是 `quast.py` 而非 `quast`**——pip 版只有 `quast.py` entry point（裸 `quast` 会 exit 127）。
+**对齐点：** `--min-contig 0` 统计全部 contig；`report.tsv` 作为输出捕获并喂给 MultiQC（`multiqc_cohort_files()` 的一部分）。
+
+### 8.5 BUSCO
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/busco.yaml`（busco 5.8.3，osx-arm64 workaround） |
+| cpus | 4 |
+| publish | `data/qc/busco/<sample>/`（pattern `out/<sample>/*`） |
+| 输入 | `tuple(sample, contigs)` |
+| 输出 | `tuple(sample, short_summary json, short_summary txt)` |
+
+```groovy
+process BUSCO {
+    tag "${sample}"
+    conda "${params.envs_dir}/busco.yaml"
+    cpus 4
+    publishDir "${params.busco_dir}", pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15: 静态路径 + 去前缀，out/<sample>/... 落进 busco/<sample>/...
+
+    input:  tuple val(sample), path(contigs)
+    output: tuple val(sample),
+            path("out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.json"),
+            path("out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.txt")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/busco
+    mkdir -p out
+    # Explicit interpreter: bin/busco's shebang resolves via PATH; under conda
+    # activation that can pick a different python3 lacking the busco module.
+    "\\${CONDA_PREFIX}/bin/python3" "\\${CONDA_PREFIX}/bin/busco" \\
+        -i ${contigs} -m genome \\
+        -l ${params.busco_lineage} \\
+        -o ${sample} --out_path out \\
+        --cpu ${task.cpus} \\
+        --download_path ${params.busco_db} \\
+        > ${params.logs_dir}/busco/${sample}.log 2>&1
+    bench_finish busco ${sample}
+    """
+}
+```
+
+**对齐点：** 显式 `$CONDA_PREFIX/bin/python3` 调用保留（shebang 解析坑的防御）；`--download_path` 指向共享 db 缓存；首跑自动下载谱系（约数百 MB）。
+**注意：** 改 `busco_lineage` 会改变 short_summary 文件名（输出模板与 publish 同步变化，与 snakefile 注释一致）。
+
+### 8.6 BAKTA
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/bakta.yaml`（bakta 1.11.4 + pyhmmer 0.10.15 pin） |
+| cpus | 4 |
+| publish | `annotation/bakta/<sample>/`（pattern `out/*`） |
+| 输入 | `tuple(sample, contigs, db_version)` |
+| 输出 | `tuple(sample, gff3, faa, tsv, ffn, gbff, txt)` |
+
+```groovy
+process BAKTA {
+    tag "${sample}"
+    conda "${params.envs_dir}/bakta.yaml"
+    cpus 4
+    publishDir(path: { "${params.annot_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15
+
+    input:  tuple val(sample), path(contigs), path(db_version)
+    output: tuple val(sample),
+            path("out/${sample}.gff3"), path("out/${sample}.faa"), path("out/${sample}.tsv"),
+            path("out/${sample}.ffn"),  path("out/${sample}.gbff"), path("out/${sample}.txt")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/bakta
+    mkdir -p out
+
+    # Prepend the AMR-guard wrapper dir so it shadows the conda bakta entry point
+    # (upstream ncbi/amr#191: one protein with overlapping NCBIFAM hits kills the run).
+    export PATH="${params.scripts_dir}/bin:\\$PATH"
+
+    bakta --db ${params.bakta_db} \\
+        --prefix ${sample} \\
+        --output out \\
+        --threads ${task.cpus} \\
+        --force --skip-plot ${contigs} \\
+        > ${params.logs_dir}/bakta/${sample}.log 2>&1
+    bench_finish bakta ${sample}
+    """
+}
+```
+
+**与 Snakemake 版的差异（有意为之）：**
+1. **删除 `2> >(tee -a ...)` 进程替换**——Nextflow 原生把 stdout/stderr 都收进 `.command.log`，不再需要 tee 分流；代价是 bakta 的 alive-progress 进度条变非 tty 而关闭（纯外观损失）。stderr 合并进同一 log（`> ... 2>&1`），崩溃 traceback 仍可查；
+2. **`--output out` 写进 workdir**，`--force` 保留以覆盖已 mkdir 的目录（Snakemake 的 rm -rf 不再需要）；
+3. `db_version.json` 作为 staged input：库升级自动触发 `-resume` 重跑（sentinel 语义保留）。
+
+**坑位（保留）：** AMR-guard 包装器（`scripts/bin/bakta` + `scripts/amr_guard/`）通过 PATH 前置生效；包装器 shebang 是 `#!/usr/bin/env python`，conda 激活后 `env python` 解析到环境内 python，可正常 import bakta.main。`--skip-plot` 保留；`--meta` 不开（分离株，非宏基因组）。
+
+### 8.7 CARVEME
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/carveme.yaml`（carveme 1.6.6 + diamond 2.2.8 + pyscipopt 5.7.1 + scip 9.2.4） |
+| cpus | 4（**决策 D2：保持原声明**；carve 本身单线程，4 只是沿袭） |
+| publish | `models/carveme/<sample>/`（pattern `out/*`） |
+| 输入 | `tuple(sample, faa)` |
+| 输出 | `tuple(sample, xml, faa_copy, tsv)`（tsv 为 carve 的 diamond 中间表，随目录 publish） |
+
+```groovy
+process CARVEME {
+    tag "${sample}"
+    conda "${params.envs_dir}/carveme.yaml"
+    cpus 4
+    publishDir(path: { "${params.carveme_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15
+
+    input:  tuple val(sample), path(faa)
+    output: tuple val(sample), path("out/${sample}.xml"), path("out/${sample}.faa"), path("out/${sample}.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/carveme
+    mkdir -p out
+
+    # CRITICAL (docs/known-issues.md #5): carve derives its diamond output path from
+    # the input path (stem + '.tsv'). Feeding bakta's faa directly would overwrite
+    # annotation/bakta/<sample>/<sample>.tsv. Always carve this staged private copy.
+    cp ${faa} out/${sample}.faa
+    carve out/${sample}.faa -o out/${sample}.xml \\
+        --solver ${params.carveme_solver} \\
+        --verbose > ${params.logs_dir}/carveme/${sample}.log 2>&1
+    bench_finish carveme ${sample}
+    """
+}
+```
+
+**坑位（保留）：** staged copy trick 原样移植——**绝不允许把 bakta 的 `.faa` 原路径喂给 carve**。`--verbose` 必加（progress print 全被 `if verbose:` 守卫；本步是全流程最慢单步）。`diamond` 中间表落在 `out/${sample}.tsv`（CarveMe 自己的目录），publish 后与 Snakemake 产物布局一致（`models/carveme/<sample>/{faa,tsv,xml}`）。
+
+### 8.8 MEMOTE
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/memote.yaml`（memote 0.17.0，cobra/glpk） |
+| cpus | 4（沿袭原声明；memote 自身主要单线程） |
+| publish | `models/memote/<sample>/`（pattern `out/*`） |
+| 输入 | `tuple(sample, model_xml)` |
+| 输出 | `tuple(sample, index.html, memote_result.json, memote_summary.tsv)` |
+
+```groovy
+process MEMOTE {
+    tag "${sample}"
+    conda "${params.envs_dir}/memote.yaml"
+    cpus 4
+    publishDir(path: { "${params.memote_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })   // F15
+
+    input:  tuple val(sample), path(model)
+    output: tuple val(sample), path("out/index.html"),
+            path("out/memote_result.json"), path("out/memote_summary.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/memote
+    mkdir -p out
+    "\\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/memote_report.py ${model} \\
+        --outdir out --sample ${sample} --solver ${params.memote_solver} \\
+        > ${params.logs_dir}/memote/${sample}.log 2>&1
+    bench_finish memote ${sample}
+    """
+}
+```
+
+**对齐点：** 一次运行三产物（HTML + 完整 JSON + 评分摘要 TSV），脚本零改动；`$CONDA_PREFIX/bin/python3` 显式解释器调用保留（cobra 模块解析坑的防御）。
+
+## 9. MULTIQC 汇聚 process 设计
+
+单 process 内四段（对应 snakefile `rule multiqc` 的 1→2→3 顺序，另加 2b 的 MEMOTE 内嵌），队列范围严格等于样本表：
+
+| 项 | 值 |
+|---|---|
+| conda | `envs/fastqc.yaml`（含 multiqc 1.21） |
+| cpus | 1 |
+| 输入 | `val report_name`（F19：运行时算出的报告名走 channel，不用运行时 params 变更）+ `val samples`（SAMPLE_NAMES 列表）+ `val upstream`（收集触发，保证上游完成）+ `path multiqc_config`（原样复用）+ `path multiqc_config_extra`（F21 排版覆盖层） |
+| 输出 | `path("${report_name}.html")` → publish 到 `reports/multiqc/` |
+
+**报告排版（F21，用户要求）：**
+
+1. **章节与 General Statistics 列一律按管线步骤排序**（FastQC → QUAST → BUSCO → CarveMe → MEMOTE → 耗时 → 版本），由 `multiqc_nextflow.yaml` 覆盖层实现——该覆盖层以第二个 `-c` 叠加，**复用配置 `multiqc_config.yaml` 保持字节一致**（决策 D4 不受影响）；
+2. **MEMOTE 的完整 `index.html` 内嵌进总报告**：MEMOTE 是自带 CSS/JS 的完整 Angular 页面（约 4.3 MB/样本），直接内联会与 MultiQC 页面互相污染（其 `<base href="/">` 会改变整页基准 URL），故由 `scripts/memote_html_section.py` 包成 `<iframe srcdoc="…">`——iframe 是独立文档，CSS/JS 相互隔离，`srcdoc` 让报告保持自包含（`file://` 或 HTTP 打开都能渲染）。代价：报告由 4.9 MB 增至 15.2 MB。
+
+```groovy
+process MULTIQC {
+    tag "${report_name}"
+    conda "${params.envs_dir}/fastqc.yaml"
+    cpus 1
+    publishDir "${params.multiqc_dir}", mode: 'copy', overwrite: true
+
+    input:
+    val  report_name          // F19: 报告名作为 channel 输入（process 指令看不到运行时 params 变更）
+    val  samples              // List<String>: cohort, from the sheet
+    val  upstream             // 收集触发：所有上游步骤完成后再跑
+    path multiqc_config
+
+    output:
+    path("${report_name}.html")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}
+
+    # ---- 1. custom content（先清空再生成：数据源缺失时脚本会跳过写文件，
+    #          残留 TSV 会把上一个更大队列的样本"泄漏"进本次报告）----
+    rm -rf ${params.cc_dir}
+    "\\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/multiqc_extras.py \\
+        --samples-tsv ${params.samples_tsv} \\
+        --quast-dir ${params.quast_dir} \\
+        --carveme-dir ${params.carveme_dir} \\
+        --memote-dir ${params.memote_dir} \\
+        --bench-dir ${params.bench_dir} \\
+        --outdir ${params.cc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    # ---- 2. BUSCO 摘要暂存（按样本表软链，不 glob 整个 busco 目录）----
+    rm -rf busco_stage
+    mkdir -p busco_stage
+    for s in ${samples.join(' ')}; do
+        set -- ${params.busco_dir}"/\\$s"/short_summary.specific.*.txt
+        if [ -f "\\$1" ]; then
+            ln -sf "\\$1" busco_stage/short_summary_"\\$s".txt
+        fi
+    done
+
+    # ---- 2b. MEMOTE 完整报告内嵌段（F21；每样本一个 *_mqc.html，
+    #          MEMOTE 自带 CSS/JS 的完整页面 -> 包成独立 iframe，避免互相污染）----
+    rm -rf memote_html
+    mkdir -p memote_html
+    "\\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/memote_html_section.py \\
+        --memote-dir ${params.memote_dir} \\
+        --samples "${samples.join(' ')}" \\
+        --outdir memote_html \\
+        --report-dir ${params.multiqc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    # ---- 3. 只喂本队列的显式文件（不是目录！）----
+    # -c 两次：先原样复用的配置，再叠排版覆盖层（章节/列顺序 + MEMOTE 内嵌）
+    multiqc ${qc_files.join(' ')} busco_stage ${params.cc_dir} memote_html \\
+        -c ${params.multiqc_config} \\
+        -c ${params.multiqc_config_extra} \\
+        -o . -f -n ${params.report_name} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    bench_finish multiqc ""
+    """
+}
+```
+
+**对齐点与差异：**
+- 四段结构与 snakefile 逐段对应：custom content 清空+生成 → BUSCO 软链 staging（命名 `short_summary_<sample>.txt`，匹配 MultiQC 的 fn 模式且 trim 出干净样本名）→ **MEMOTE 完整 HTML 内嵌** → `multiqc` 显式文件列表；
+- `qc_files` 列表内容 = `multiqc_cohort_files()` 的产物（4 个 fastqc zip + `report.tsv` × 样本数），**built-in 模块绝不扫目录**（否则子集报告里 custom content 是子集、FastQC/QUAST 却是全队列，自相矛盾）；
+- 差异一：`multiqc` 的 `-o .` 写进 workdir，再由 publishDir 发布 `reports/multiqc/`（Snakemake 直写仓库目录）；custom content 仍写仓库 `reports/multiqc/custom_content/`（与原布局一致，每次先清空）；
+- 差异二：busco staging 目录改在 workdir（Snakemake 在仓库目录）——纯临时物，不进仓库更干净；软链源仍是仓库内的 BUSCO 产物（绝对路径，不会拼出无效路径）；
+- 差异三（F21）：报告章节/General Stats 列按管线顺序排列，且 MEMOTE 完整 HTML 内嵌——Snakemake 版无此两项，属移植版新增的呈现能力（不改任何数值产物）；
+- `-c` 显式指定 `multiqc_config.yaml` + `multiqc_nextflow.yaml`；两者都作为 input，改任一个都会改变 MULTIQC 的 input hash → `-resume` 自动重跑报告。
+
+## 10. 计时与 benchmark 适配（`bin/task_env.sh`）
+
+`multiqc_extras.py` 的耗时表读取契约**不可破坏**：`benchmarks/<step>/<sample>.tsv`（per-sample）与 `benchmarks/<step>.tsv`（流水线级，如 `multiqc.tsv`），TSV 需含 `s` 与 `h:m:s` 两列。Snakemake 的 `benchmark:` 由引擎写入；Nextflow 无对等物，改由**任务内自计时**产出同格式文件，使 `multiqc_extras.py` 一行不改：
+
+```sh
+# bin/task_env.sh — write Snakemake-format benchmark TSVs so that
+# scripts/multiqc_extras.py keeps working unchanged.
+# Requires $BENCH_DIR in the environment (set by the task before sourcing).
+
+bench_start() { _bench_t0=$(date +%s); }
+
+bench_finish() {
+    step="$1"; sample="$2"
+    t1=$(date +%s); secs=$((t1 - _bench_t0))
+    hms=$(awk -v s="$secs" 'BEGIN { printf "%d:%02d:%02d", int(s/3600), int(s%3600/60), s%60 }')
+    if [ -n "$sample" ]; then
+        out="$BENCH_DIR/$step/$sample.tsv"
+    else
+        out="$BENCH_DIR/$step.tsv"          # pipeline-level row (e.g. multiqc)
+    fi
+    mkdir -p "$(dirname "$out")"
+    printf 's\th:m:s\n%d\t%s\n' "$secs" "$hms" > "$out"
+}
+```
+
+约定：
+- 每个 process 的 script 以 `bench_start` 开头、`bench_finish <step> [<sample>]` 结尾（见 §8 各代码块）；fastqc 类 step 的 sample 为 `<sample>_<read>`，与原 benchmark 文件名一致；
+- MULTIQC 调用 `bench_finish multiqc ""` → `benchmarks/multiqc.tsv`，对应"all samples"行；
+- 已知偏差（可接受）：MULTIQC 任务运行时，`benchmarks/multiqc.tsv` 是**上一次**运行留下的（`collect_benchmarks` 对缺失文件本就优雅跳过），首跑时"all samples"行缺席——与 Snakemake 首跑行为一致；
+- 资源列（max_rss 等）不写——本机 Snakemake benchmark 的资源列本来就是全 `NA`（known-issues #3），只有 wall time 可用；如需资源数据，用 Nextflow 自己的 `-with-report`（execution report HTML）补充。
+
+**耗时可比性说明（2026-10-14 复盘，勿误读报告里的 runtime 表）：**
+
+- `pipeline_runtime` 表是**各步骤 wall time 的逐列明细**；把一行横向相加得到的是**各步耗时之和**，不是整条管线的墙钟时长——并行步骤（QUAST/BUSCO/BAKTA 同批、两样本并行）会被重复计入，因此"求和值"天然大于真实墙钟。与 Snakemake 的"整条管线 40 分钟"直接对比属于**口径不同**。
+- 首次移植验证的这批数字**受机器环境严重干扰，不代表管线固有成本**。当时实测证据：整机 load average **18–33**（8 核机器），且磁盘**近乎写满（460 GiB 用 431 GiB，仅剩 2.3 GiB / 100%）**——Spades/Bakta/CarveMe 都是写密集型，写满的卷会显著拖慢 I/O，其后还直接导致 SPAdes `gzip` 崩溃（F20）。
+- 同机同参数的两个样本差异可达 **30×**（BUSCO：SRR1770413 用 979 s vs SRR10194530 用 32 s），这是环境干扰占主导的直接证据，而非管线逻辑差异。
+- 已排除的因素：线程数正确（Spades 日志 `--threads 8`）；Nextflow 26.x 本地执行器**确实按 `cpus` 预算调度**（受控实验：4 个 `cpus=4` 任务在 8 核上严格两两串行；真实运行中第二个 BUSCO 被排队到有空槽才提交）；`bench_start/bench_finish` 精确夹住工具命令，测量本身无偏差。
+- 结论：**在空闲机器 + 充足磁盘上重跑，数值才与 Snakemake 基线可比。** 报告里那张表应连同本说明一起阅读。
+
+**单步对照复测（2026-10-14 09:44 起，空闲机器 load ≈ 3，磁盘 25 GiB 可用；同一机器/同一输入/同一命令/同一 conda 环境）：**
+
+| 步骤（样本） | Snakemake 基线¹ | 受干扰运行 | 空闲机器复测 | 复测/基线 |
+|---|---|---|---|---|
+| Bakta (SRR1770413) | 291 s (4:51) | 3780 s (63:00) | **227 s (3:46)** | **0.78×（更快）** |
+| SPAdes (SRR1770413) | 558 s (9:18) | 7173 s (119:33) | **446 s (7:26)** | **0.80×（更快）** |
+
+¹ 基线取自源仓库 `docs/known-issues.md` §4 的表（由 `.snakemake/metadata/` 的 starttime/endtime 提取）。
+
+- **结论（已证实）**：管线本身**没有性能缺陷**——空闲环境下两个重型步骤都比 Snakemake 基线**更快**；此前 13–17× 的膨胀完全来自外部环境（满盘 + 3–4 倍超订负载）。按复测节奏推算，空闲机器上两样本整轮墙钟应与 Snakemake 的 ~51 分钟相当。
+- 顺带确认可复现性：复测产出的 `contigs.fasta` 与**已发布产物及源仓库 Snakemake 产物三者逐字节一致**；Bakta tsv 行数一致（4891）。
+- 复测暴露的规律：**轻量步骤（fastqc/trimmomatic/quast）当时几乎不受影响（≈1.0×），只有重型、写密集步骤爆炸（3–30×）**——这是"满盘 I/O 压力"而非"CPU 被抢"的典型特征。
+
+**全量重跑（2026-10-14 12:47–13:25，空闲机器 load ≈ 2.6、磁盘 23–25 GiB 可用、无环境重建）：**
+
+| 步骤 | 空闲重跑 K-12 | 空闲重跑 O157 | 受干扰运行 K-12 | 受干扰运行 O157 | Snakemake 基线 K-12 | Snakemake 基线 O157 |
+|---|---|---|---|---|---|---|
+| fastqc_raw | 23 s | 21 s | 26 s | 18 s | 22 s | 16 s |
+| trimmomatic | 40 s | 33 s | 34 s | 29 s | 33 s | 24 s |
+| fastqc_trimmed | 18 s | 14 s | 24 s | 13 s | 17 s | 22 s |
+| **spades** | **437 s** | **303 s** | 7173 s | 2549 s | 558 s | 428 s |
+| quast | 21 s | 21 s | 1 s | 1 s | 1 s | 1 s |
+| busco | 36 s | 75 s | 979 s | 32 s | 33 s | 36 s |
+| **bakta** | **385 s** | **366 s** | 3780 s | 6670 s | 291 s | 398 s |
+| **carveme** | **619 s** | **660 s** | 1870 s | 1004 s | 616 s | 644 s |
+| memote | 258 s | 241 s | 1134 s | 318 s | 174 s | 145 s |
+| **各步之和（两样本）** | | **3495 s** | | 25574 s | | **3382 s** |
+
+- **整轮墙钟 ≈ 38 分钟**（12:47:20 → 13:25:10），比 Snakemake 记录的 ~51 分钟墙钟更短（并行度更高）。
+- **各步骤之和 3495 s vs 基线 3382 s = 1.03×**——移植版在空闲环境下与 Snakemake **基本等速**；SPAdes 反而快 22–29%，CarveMe 几乎完全一致（1.00×/1.02×）。
+- 受干扰运行 25574 s → 空闲重跑 3495 s：**同样的管线相差 7.3×**，环境是唯一变量。
+- 本轮 MULTIQC 由**管线自身的 process** 生成（非手工），顺带端到端验证了 F19（report_name 走 channel 输入）与 F21（章节排序 + MEMOTE 内嵌）在真实调度路径下生效；报告内 `iframe srcdoc` ×2、章节顺序符合管线序。
+- 产物再次与源仓库**逐字节一致**（Spades `contigs.fasta` ×2、QUAST `report.tsv` ×2、Trimmomatic 全部），Bakta tsv 行数一致（4891）。
+- 遗留小差异（不影响结论）：QUAST 本轮 21 s（上次 1 s、基线 1 s），绝对值差 20 s；MEMOTE 比基线慢 1.5–1.7×（绝对值 <100 s，且 MEMOTE 含 FBA 求解的机器相关波动）。
+
+## 11. 日志与 publishDir 策略
+
+| 产物 | 位置 | 机制 |
+|---|---|---|
+| 各 step 日志 | `logs/<step>/<sample>.log`（仓库目录，与 Snakemake 布局一致） | task 内 `> ${params.logs_dir}/...` 直写绝对路径 |
+| multiqc 日志 | `logs/multiqc.log` | 同上（`>>` 追加，三段共用一个 log） |
+| task 完整 stdout/stderr | `work/**/.command.log` | Nextflow 原生（bakta 的 traceback 由此兜底） |
+| 数据产物 | `data/ assembly/ annotation/ models/ reports/` | task 写 workdir → `publishDir` copy 到仓库绝对路径，`overwrite: true` |
+| 执行报告/资源 | `nextflow run -with-report -with-trace -with-timeline` | 按需开启，替换 Snakemake benchmark 的资源列 |
+
+**注意：** 数据产物必须"写 workdir → publish"，因为 Nextflow 只捕获 workdir 内的声明输出（直接写仓库路径会报 missing output）；logs/benchmarks 是非声明输出，允许像 Snakemake 一样直写仓库路径（本管线运行于本地单机，无共享文件系统并发顾虑；若未来上集群，改为 publishDir 重命名发布）。
+
+## 12. `nextflow.config` 草案
+
+```groovy
+// ============================================================
+// WGSpipeline-nextflow configuration
+// ============================================================
+
+params {
+    // ---- project anchors (wfpath() analogue) ----
+    project_dir    = projectDir                       // dir of main.nf
+    samples_tsv    = "${projectDir}/samples.tsv"
+    raw_dir        = "${projectDir}/../WGSpipeline/raw"
+    bakta_db       = "${projectDir}/../WGSpipeline/db/bakta/db-light"
+    busco_db       = "${projectDir}/../WGSpipeline/db/busco"
+    scripts_dir    = "${projectDir}/scripts"
+    envs_dir       = "${projectDir}/envs"
+    bin_dir        = "${projectDir}/bin"
+    multiqc_config = "${projectDir}/multiqc_config.yaml"
+
+    // ---- output dirs (identical layout to the Snakemake version) ----
+    raw_qc_dir   = "${projectDir}/data/qc/raw"
+    trim_dir     = "${projectDir}/data/clean_trimmomatic"
+    trim_qc_dir  = "${projectDir}/data/qc/trimmed"
+    assembly_dir = "${projectDir}/assembly/spades"
+    quast_dir    = "${projectDir}/data/qc/quast"
+    busco_dir    = "${projectDir}/data/qc/busco"
+    annot_dir    = "${projectDir}/annotation/bakta"
+    carveme_dir  = "${projectDir}/models/carveme"
+    memote_dir   = "${projectDir}/models/memote"
+    multiqc_dir  = "${projectDir}/reports/multiqc"
+    cc_dir       = "${multiqc_dir}/custom_content"
+    logs_dir     = "${projectDir}/logs"
+    bench_dir    = "${projectDir}/benchmarks"
+
+    // ---- workflow params (same names as the Snakemake config keys) ----
+    threads_default    = 8
+    carveme_solver     = 'scip'
+    memote_solver      = 'glpk'
+    busco_lineage      = 'enterobacterales_odb10'
+    quast_min_contig   = 0
+    report_tag         = ''
+    spades_careful     = '--careful'
+    trimmomatic_adapters = ''                       // fallback if $CONDA_PREFIX copy missing
+
+    trim {
+        leading       = 3
+        trailing      = 3
+        slidingwindow = '4:20'
+        minlen        = 36
+    }
+}
+
+process {
+    errorStrategy = 'finish'                        // Snakemake --keep-going equivalent
+    withName: FASTQC_RAW     { cpus = 4 }
+    withName: FASTQC_TRIMMED { cpus = 4 }
+    withName: TRIMMOMATIC    { cpus = params.threads_default }
+    withName: SPADES         { cpus = params.threads_default }
+    withName: QUAST          { cpus = 1 }
+    withName: BUSCO          { cpus = 4 }
+    withName: BAKTA          { cpus = 4 }
+    withName: CARVEME        { cpus = 4 }
+    withName: MEMOTE         { cpus = 4 }
+    withName: MULTIQC        { cpus = 1 }
+}
+
+conda {
+    enabled  = true
+    useMamba = true                                    // M0 实测（F5）：环境创建走 mamba
+    cacheDir = "${params.project_dir}/.nextflow/conda"   // mirrors .snakemake/conda
+}
+
+workDir = "${params.project_dir}/work"
+
+profiles {
+    standard { }                                     // 8-core local machine default
+    // --set-threads analogue, e.g.: nextflow run . -profile lowmem
+    // F13: 26.x 拒绝 process.withName: 简写，须用嵌套 process { withName: 'X' } 形式
+    lowmem {
+        process {
+            withName: 'SPADES'      { cpus = 4 }
+            withName: 'TRIMMOMATIC' { cpus = 4 }
+        }
+    }
+}
+```
+
+**待验证清单——里程碑 0 已实测（Nextflow 26.10.0，conda env `nextflow`，Java 25 / Groovy 4.0.33）：**
+
+| # | 问题 | 结论 |
+|---|---|---|
+| 1 | `projectDir` 在 `nextflow.config` 中可用？ | ✅ **可用**。实测 `params.probe_root = projectDir` 展开为 `main.nf` 所在目录的绝对路径，与 `workflow.projectDir` 一致。§4 路径锚定方案成立。 |
+| 2 | conda yaml `name:` 字段兼容性 | ✅ **无问题**。用真实 `fastqc.yaml`（`name: fastqc`）实测：Nextflow 接受、无告警无报错；环境缓存目录按 hash 命名（`env-<md5>`），与 `name:` 字段无关。8 个 yaml 无需剥离 `name:` 行。 |
+| 3 | `$CONDA_PREFIX` 在 conda 任务内导出？ | ✅ **已导出**。实测任务内 `$CONDA_PREFIX` 指向 Nextflow 创建的环境（`<cacheDir>/env-<hash>`），`python3/fastqc/multiqc` 均解析到环境内。注意：若该 yaml 未 pin java（如 fastqc.yaml），`java` 解析到系统 java（`/usr/bin/java`）——正常；trimmomatic.yaml 自带 openjdk=17，其任务内 `java` 会解析到环境内。§8.2 的 adapter 路径、§8.5/8.8 的 `$CONDA_PREFIX/bin/python3` 写法全部成立，fallback 不需要。 |
+| 4 | `publishDir` 引用 input 变量（`${sample}`） | ⚠️ **字符串形式不行，闭包形式可行**（与"预期无风险"相反）。26.x 严格语法下 `publishDir "${dir}/${sample}"` 在解析期报 `No such variable: sample`；改为闭包 `publishDir(path: { "${dir}/${sample}" }, mode: 'copy', overwrite: true)` 实测按样本正确发布。§8.3–8.8 全部改闭包形式。 |
+
+**里程碑 0 额外发现（影响代码写法，F1–F8）：**
+
+- **F1 严格语法（26.x 默认）**：顶层语句与声明不可混排（`Statements cannot be mixed with script declarations`）。§6 的解析期校验代码必须移入 `workflow { main: ... }`（放最前、任何 process 调用之前）。实测 `error "msg"` 在 workflow 内可用，坏输入同样立即失败（fail-fast 语义保留）；且 `-preview`/`-stub` 都会执行 workflow 语句，校验在两者下同样生效。
+- **F2 `workflow.onComplete` 处理器已移除**：25.10 起改为入口 workflow 块内的 `onComplete:` 节（`onError:` 同理）。实测 `onComplete:` 节在失败退出时也会执行。§7 代码片段照此改写。
+- **F3 publishDir 闭包**：见清单 #4。
+- **F4 `nextflow.enable.dsl = 2` 不再需要**：DSL2 早已是默认；写法保留亦可（feature flag 赋值），正式代码省略。
+- **F5 `conda.useMamba = true` 可用**：环境创建走 mamba，显著加速；已加入 §12 config 草案。
+- **F6 Nextflow 版本**：安装到的是 26.10.0（远高于文档假定的 ≥23.04），严格语法默认开启；本机 Java 25 兼容实测通过（Groovy 4.0.33 on OpenJDK 25）。
+- **F7 `-preview` 行为变化**：26.x 下 `-preview` 只执行 workflow 语句（校验生效）但**不再输出各 process 的渲染命令**；§14 阶段 A 的"读渲染命令"改用 `-stub` 后读 `work/**/.command.sh`（M1 实测可行，F14）。`nextflow inspect` 在最小探针与真实项目上均返回空 `processes` 列表，**不作为验收手段**。
+- **F8 环境构建成本**：首个 conda 任务触发 mamba 建环境（fastqc.yaml ≈ 1 分钟内）；8 个环境将在首次真实运行时逐个构建，与风险 #1 预期一致。
+
+以上结论的复现探针保存在 `m0probe/`（`main.nf` + `nextflow.config` + `data/` 假 fastq），可作为后续 Nextflow 升级的回归检查。
+
+**里程碑 1 补充发现（编写正式 main.nf/config 时实测，F9–F14）：**
+
+- **F9 GString `!r` 修饰符不支持**：`${name!r}` 解析期报 `Unexpected input: '!'`——错误信息里直接用普通插值 `${name}`。
+- **F10 script 字符串转义**：shell 变量必须**单反斜杠** `\$VAR`；文档草案里 `\\$VAR` 会被 Groovy 当成"反斜杠 + 插值"→ 解析期 `VAR is not defined`。
+- **F11 闭包变量**：严格检查器不接受 `f(args)` 闭包调用与带类型闭包参数（`{ String x -> }`），报 `f is not defined`——闭包定义提到外层、参数去类型、调用用 `f.call(args)`。
+- **F12 `Channel.of(collection)` 不再拆列表**：26.x 下整列表被当作单个元素（`SAMPLES[n]` 变 null）——用 `Channel.fromList(list)`。
+- **F13 config 的 process selector 简写**：`process.withName: X` 在 26.x 解析失败（`Unexpected input: ':'`）——用嵌套 `process { withName: 'X' { … } }` 且名字加引号。
+- **F14 `-stub` 语义（M2 更正）**：26.10 下**未声明 `stub:` 块的 process 在 `-stub` 时照常执行真实脚本**（M1 的"stub 干跑"实为真跑，M2 复测确认）。为所有 process 补上 `stub:` 块后，`-stub` 才是真干跑（生成 touch 出的占位产物）。⚠️ 干跑会以空文件覆盖已 publish 的真实产物（F18）——只在产物目录为空/可丢弃时使用。
+- **F15 publishDir pattern 不剥前缀**：`out/contigs.fasta` 发布成 `<目标>/out/contigs.fasta`——加 `saveAs: { filename -> filename - 'out/' }` 去前缀（pattern 用 `out/**`），实测（含 closure path 组合）布局正确。§8.3–8.8 已按此改写。
+- **F16 严格解析器拒绝单行 section**：`input: val x` / 逗号串接的 `output: path(...), path(...)` 会解析失败（`Unknown method invocation 'path'`）——input/output 各占独立行，多输出逐行写。
+- **F17 `-resume` 对缓存任务按最新 publishDir 指令重新发布**：改 publish 指令后 `-resume` 无需重算即可修正已发布布局（M2 实测）；但同时会把旧布局残留（如 `out/` 嵌套目录）留在仓库里，需手动清理。
+- **F18 `-stub` 干跑会 publish 空产物**：`touch` 出的占位文件经 publishDir 覆盖真实产物（M2 踩坑，已用真实重跑恢复）——干跑仅限产物目录为空时使用，或先备份产物。
+- **F19 process 指令看不到运行时 params 变更**：在 `workflow.main` 里 `params.report_name = ...` 运行时赋值，`onComplete` 能读到、但 process 的 `tag`/`output`/`publishDir` 指令求值在独立上下文，读到的是**未变更的 config params**（`report_name` 为 null）→ 报 `unable to find ... null.html`。解法：把运行时计算的值（report 名）作为 channel `val` 输入传给 process，指令里用该输入变量（`${report_name}`），不再依赖运行时 params 变更。
+- **F20 磁盘满导致的 SPAdes gzip 失败**：整机磁盘 100%（剩 ~2GB）时，SPAdes 在 read-correction 阶段 `gzip -f -7` 写 corrected 文件失败（OS return 1）并 abort，且 `-resume` 缓存也无法持久化（每次重跑全量）。**非管线缺陷**，属机器资源问题；清出 ~10GB（删 `work/`、`.conda-pkgs`）后恢复。教训：跑重步骤（SPAdes/BUSCO/Bakta）前确认磁盘余量 ≥ ~20GB。
+
+- **F21 MultiQC 排版（用户要求的两项呈现改动）**，实测于 MultiQC 1.21：
+  - `report_section_order` 在此版本是**单一扁平层级**——custom content 的每个章节各自作为顶层条目，anchor 就是**章节 ID**（`carveme_summary`/`memote_summary`/`pipeline_runtime`），写成 `custom_content:` 会报 `anchor 'custom_content' not found` 而被静默忽略；语义为 **`order` 数值越大越靠前**（默认值按 10,20,30… 递增分配）。
+  - General Statistics 表的**列顺序**另由 `table_columns_placement`（`namespace` → 列 key → 数值，默认 1000，**越小越靠左**）控制；内置 QUAST 的列 key 带空格（`"Total length"`，见 `quast.py`），写 `Total_length` 不生效。
+  - **多层 `-c` 配置是替换而非深合并**：第二个配置里的 `sp:` 会整体覆盖第一个的 `sp:`，令复用配置的 search pattern 全部失效（实测：MEMOTE 段被静默丢弃）。故 MEMOTE 内嵌段改用 MultiQC 内置的 `*_mqc.html` **自动发现**约定（无需 `sp:`），每文件的 `id`/`section_name`/`description` 写在文件头部 HTML 注释里（MultiQC `_find_html_file_header()` 读取）。
+  - 完整 HTML 页面（MEMOTE 的 Angular 报告，含 `<base href="/">` 与自带 `<style>/<script>`）**不能直接内联**：会与 MultiQC 页面互相污染。改包 `<iframe srcdoc="…">`——iframe 是独立文档（CSS/JS 隔离），`srcdoc` 让报告保持自包含。代价：报告 4.9 MB → 15.2 MB（两样本各约 5.2 MB 转义后）。
+  - 验收：章节顺序 `fastqc → quast → busco → carveme_summary → memote_summary → memote_full_* → pipeline_runtime → multiqc_software_versions`；General Stats 列 `FastQC×6 → QUAST×5 → CarveMe×2 → MEMOTE×1`；报告内 `iframe srcdoc` ×2、`MemoteReportApp` ×2，且 MultiQC 页面 DOM 中不含 MEMOTE 的 `<base href="/">`（未污染）；`multiqc_data.json` 仍为 0.79 MB（HTML 内容不入数据文件）。
+
+**里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
+
+## 13. 运行方式
+
+```bash
+cd /path/to/WGSpipeline-nextflow
+
+nextflow run .                          # 全流程（profile standard 自动生效）
+nextflow run . -profile lowmem          # 覆盖线程（--set-threads 语义）
+nextflow run . --report_tag cohort_b    # 子集/单样本报告（需先换 samples.tsv）
+nextflow run . -resume                  # 断点续跑（对应 Snakemake 缓存）
+nextflow run . -preview                 # 不执行任务；26.x 不再渲染命令（见下注 F7）
+nextflow run . -stub                    # 真干跑（各 process 均有 stub: 块）；⚠️ 会以空文件覆盖已 publish 的真实产物（F18），仅限产物目录为空时使用
+nextflow run . -with-report -with-trace # 执行报告 + 资源/耗时 trace
+```
+
+**M0 实测（F7）：** 26.x 的 `-preview` 会执行 workflow 语句（样本表校验生效）但**不再输出各 process 的渲染命令**；阶段 A 的"读渲染命令"改用 `-stub` 跑完后读 `work/**/.command.sh`（stub 模式下各任务目录仍生成命令脚本），或 `nextflow inspect`（M0 对最小探针返回空 `processes` 列表，M1 在真实项目上再验证其可用性）。
+
+与 Snakemake 差异说明：`-resume` 按任务 hash 缓存；**强制重跑某步骤** = 删除该步骤在仓库里的 publish 产物（Nextflow 检测不到输出即重算）——比 `--forcerun` 粗糙，但覆盖同一需求。
+
+## 14. 验证与对拍方案
+
+遵循既有纪律：**改完规则先读渲染命令，不真跑**；对拍用现有 Snakemake 产物做基准。
+
+### 阶段 A：静态验证（零成本）
+1. `nextflow run . -stub` 真干跑（F7/F14：26.x 的 `-preview` 不渲染命令；所有 process 已带 stub: 块；**注意 F18——stub 会 publish 空文件，仅在产物目录为空时执行**）：确认 process 数量、输入/输出签名；读 `work/**/.command.sh` 核对渲染命令（stub 模式下 `.command.sh` 是 stub 体，渲染命令核对改在首次真实任务目录进行）；
+2. 逐一核对 §8 渲染出的命令行与原 snakefile `-n` 输出的 shell 行（wildcards 替换后逐 token 对齐：参数值、路径、`--labels`、`--min-contig`、`--solver` 等）；
+3. 坏样本表注入测试：缺列 / 坏样本名 / 重复名 / fq 不存在 → 全部在 workflow 启动期（任何任务执行前）即失败。
+
+### 阶段 B：2 样本全量对拍（约 38 分钟基线）
+```bash
+nextflow run . -resume
+```
+与 `../WGSpipeline/` 现有产物逐项对比：
+
+| 产物 | 对比方式 | 通过标准 |
+|---|---|---|
+| `data/clean_trimmomatic/*`（4 个 fastq.gz） | `cmp` 字节比较 | 字节一致（Trimmomatic 确定性） |
+| `assembly/spades/<s>/contigs.fasta` | 序列比对（`cmp`/`diff`，不一致则查 N50 与总长） | 一致；SPAdes 同版本同线程应确定 |
+| `data/qc/quast/<s>/report.tsv` | `diff` 关键指标（N50/L50/GC%） | 数值一致 |
+| `data/qc/busco/<s>/short_summary.*.txt` | `diff` | 一致 |
+| `annotation/bakta/<s>/<s>.tsv` | `head -1` 检查 | 首行 `# Annotated with Bakta`；与 Snakemake 版 diff 一致 |
+| `models/carveme/<s>/<s>.xml` + `<s>.tsv` | 存在性 + 行数 | **Bakta 的 tsv 未被覆盖**（known-issues #5 spot check）；diamond 表落在 CarveMe 目录 |
+| `models/memote/<s>/`（3 文件） | `diff memote_summary.tsv` | 评分一致（FBA 数值允许微小平台差） |
+| `reports/multiqc/multiqc_report.html` | grep 样本名 | **恰好 2 个样本**，custom content（MEMOTE 评分、耗时表、QUAST L50）齐全 |
+| `logs/`、`benchmarks/` | 布局检查 | 与 Snakemake 目录树一致；`benchmarks/multiqc.tsv` 存在 |
+
+### 阶段 C：行为对拍
+1. `--report_tag cohort_b`：子集报告与全队列报告并存，互不覆盖，报告内容=样本表；
+2. 单样本失败：其余样本照常完成（errorStrategy `finish` 语义），失败样本重跑 `-resume` 后收敛；
+3. 改 `multiqc_config.yaml` / `db/version.json` → `-resume` 自动重跑 MULTIQC / BAKTA；
+4. O157:H7 样本（SRR10194530）跑通 BAKTA——AMR-guard 路径生效的既有触发样本。
+
+## 15. 风险登记表
+
+| # | 风险 | 影响 | 应对 |
+|---|---|---|---|
+| 1 | Nextflow 未安装（本机当前没有） | ~~阻塞实施~~ | ✅ **已解决（M0）**：conda 环境 `nextflow` 安装 26.10.0（满足 ≥23.04，DSL2 默认，Java 25 实测兼容）；8 个 conda 环境将在首次真实运行时逐个联网构建 |
+| 2 | conda yaml `name:` 字段与 Nextflow 兼容性 | ~~低~~ | ✅ **已验证（M0）**：接受且无告警，无需剥离 `name:` 行（见 §12 清单 #2） |
+| 3 | `$CONDA_PREFIX` 在任务内不可用 | ~~中~~ | ✅ **已验证（M0）**：任务内已导出（见 §12 清单 #3）；fallback 方案废弃 |
+| 4 | macOS/arm64 四个 env workaround 是 osx 专用 | 中 | 原样随 yaml 迁移（本机仍是 Mac）；换 Linux 集群时另行重推导（既有结论，非本次移植引入） |
+| 5 | `multiqc_extras.py` 依赖仓库绝对路径（quast/carveme/memote/bench 目录） | 中 | 已按设计传 `params.*` 绝对路径；对拍阶段 B 的 custom content 检查兜底 |
+| 6 | 线程声明与实际不符（carveme 4/实际 1、spades 8 独占） | 低 | 决策 D2 保持原数字；`-profile lowmem` 提供覆盖手段；对拍通过后另行优化 |
+| 7 | MULTIQC 首跑缺 "all samples" 耗时行 | 极低 | 已知偏差，Snakemake 首跑同行为 |
+| 8 | `-resume` 与"改样本表/改参数"交互（参数变化不触发重算，与 Snakemake 相同） | 低 | 文档写明：换参数用 `-profile`/CLI 显式覆盖并在必要时清空对应产物 |
+| 9 | publishDir `overwrite: true` 覆盖语义与旧产物并存 | 低 | 每样本目录隔离，同样本重跑即覆盖，与 Snakemake 幂等语义一致 |
+| 10 | 设计文档代码片段基于 23.x 语法（顶层语句、`workflow.onComplete`、publishDir 字符串），与 26.x 严格语法不兼容 | 高（M1 直接编译失败） | ✅ **已消除（M0–M4）**：F1–F21 实测结论已回写 §6/§7/§8/§9/§12/§13/§14 并落地正式 `main.nf`/`nextflow.config`；`m0probe/` 探针可回归复测 |
+
+## 16. 决策记录
+
+| ID | 决策 | 状态 |
+|---|---|---|
+| D1 | 新项目目录 `WGSpipeline-nextflow/`，与 `WGSpipeline/` 平级（用户指定） | 已定 |
+| D2 | 线程数保持原声明数字（carveme=4 等），不做"顺手修正" | 已定 |
+| D3 | 本轮只产出设计文档；代码实施待批准后按里程碑执行 | 已定 |
+| D4 | 复用资产（envs/scripts/multiqc_config.yaml）以字节一致副本纳入新仓库；raw/、db/ 默认以 params 指回原仓库 | 已定 |
+| D5 | 输出目录树布局与 Snakemake 完全一致，但落在新仓库内（原仓库产物不动） | 已定 |
+| D6 | benchmark 改由任务内自计时（`bin/task_env.sh`）产出同格式 TSV，`multiqc_extras.py` 零改动 | 已定 |
+| D7 | `--keep-going` → `process.errorStrategy = 'finish'` | 已定 |
+| D8 | bakta 的 `2> >(tee)` 进程替换删除（Nextflow 原生捕获 stderr）；AMR-guard 保留 | 已定 |
+| D9 | 数据产物"workdir 写入 + publishDir 发布"；logs/benchmarks 直写仓库绝对路径（本地单机假设） | 已定 |
+| D10 | 代码写法按 Nextflow 26.x 严格语法修订：§6 校验代码进 `workflow.main`、§7 `onComplete` 改块内节语法、§8.3–8.8 publishDir 改闭包形式（依据 M0 实测 F1–F8） | 已定 |
+| D11 | trimmomatic adapter 优先级按 snakefile 语义：param 优先、空则 `$CONDA_PREFIX` 自带（修正 §8.2 草案 env-first 顺序） | 已定 |
+
+## 17. 里程碑与后续开放问题
+
+| 里程碑 | 内容 | 验收 |
+|---|---|---|
+| 0 | 安装 Nextflow；验证 §12 待验证清单 1–4 | ✅ **完成（2026-10-14）**：Nextflow 26.10.0（conda env `nextflow`，mamba 安装）；四项结论 + F1–F8 见 §12 清单表；复现探针 `m0probe/` |
+| 1 | 骨架：config + 解析期校验 + FASTQC×2 + TRIMMOMATIC | ✅ **完成（2026-10-14）**：资产副本入库（`docs/asset-sources.md`，来源 commit `75f1d21`）；`-stub` 干跑 10 任务 DAG 正确；渲染命令逐 token 对齐；坏样本表 4 例注入全部启动期失败；真实运行产物与源仓库一致且 Trimmomatic 逐字节一致；F9–F14 见 §12 清单表 |
+| 2 | 组装与 QC：SPADES / QUAST / BUSCO | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；QUAST `--labels` 坑位验证（报告内 assembly=样本名）；真实运行 **SPAdes contigs.fasta 与 QUAST report.tsv 均与源仓库逐字节一致**；BUSCO 评分与源仓库一致（差异仅输入路径与 python 补丁号等元数据）；publish 布局修正（F15 saveAs）；F14–F18 见 §12 清单表 |
+| 3 | 注释与建模：BAKTA(+guard) / CARVEME / MEMOTE | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；真实运行通过——**AMR-guard 在 O157:H7（SRR10194530）触发并成功兜底**（日志见 `[amr-guard] WARNING ... retrying chunk-wise`，bakta.tsv 完整产出）；**CarveMe 不覆盖 Bakta TSV**（坑位 #5：bakta tsv 首行 `# Annotated with Bakta` 完好，diamond 表落在 carveme 目录）；MEMOTE 评分 SRR1770413=68.0 / SRR10194530=67.7 |
+| 4 | 报告：MULTIQC + task_env 计时 | ✅ **完成（2026-10-14）**：custom content 6 个 TSV（carveme_modelstats/summary、memote_score/summary、pipeline_runtime、quast_generalstats）齐全；`benchmarks/` 含 multiqc.tsv + 22 个 per-sample 计时 TSV；报告内恰 2 个样本（cohort=样本表，不扫目录）。**排版（F21，用户要求）**：章节与 General Stats 列均按管线顺序（FastQC→QUAST→BUSCO→CarveMe→MEMOTE→耗时→版本），并把 MEMOTE 完整 `index.html` 以独立 iframe 内嵌进报告（报告 4.9 MB → 15.2 MB）。注：因 F19/F20，报告最终以与 process 完全一致的命令手动生成（见 §12.1 F20/F21） |
+| 5 | 全量对拍（阶段 B/C）+ 回写文档 + readme 补充 Nextflow 运行说明 | 对拍表全部通过 |
+
+**开放问题：**
+1. 复用资产副本的同步机制：手动同步（记录来源 commit）还是 git submodule？（实施时定）
+2. `raw/`、`db/` 后续是否复制/迁移进新仓库，还是长期以 `../WGSpipeline` 引用？（用户定）
+3. 是否在里程碑 5 后追加 Docker/Singularity profile？（可选）
+4. `samples.tsv` 的新仓库副本与原仓库如何保持同步（两份表并存期间的分歧风险）？
+
+## 18. 收尾审查结论（逻辑 / 生物学准确性 / 易用性，2026-10-14）
+
+**管线逻辑 —— 通过。** 10 步 DAG 正确（FastQC→Trimmomatic→FastQC→SPAdes→{QUAST,BUSCO,BAKTA}→CarveMe→MEMOTE→MultiQC）；cohort 严格等于样本表（报告恰好 2 样本，不扫目录）；params 与源 config 键 1:1；`-resume`（hash 缓存）、`errorStrategy='finish'`（--keep-going）、`report_tag` 多报告并存、`db/version.json` sentinel 均已实现并验证。
+
+**生物学准确性 —— 通过（有据）。**
+- BUSCO 100% 完整（440/440，0 缺失）——高质量组装；
+- QUAST：K-12 4.84 Mb / 50.33% GC / N50 159 kb；O157:H7 5.40 Mb / 50.34% GC / N50 244 kb——与已知大肠杆菌基因组大小一致（O157:H7 因前噬菌体/O-岛更大）；
+- 组装大小与样本表物种（K-12 vs O157:H7）吻合；BUSCO 谱系 enterobacterales_odb10 正确；MEMOTE 评分 68.0 / 67.7（草稿 GEM 典型值）；
+- Trimmomatic/SPAdes/QUAST 与源仓库逐字节一致 → 无静默漂移；AMR-guard 正确处理 O157:H7 的 AMRFinderPlus 崩溃边缘用例。
+
+**易用性 —— 通过（一处缺口）。** 单入口 `nextflow run .`，conda 环境自动构建，`-profile standard/lowmem`，CLI 覆盖 params，samples.tsv 沿用源格式。**缺口**：新仓库尚无 Nextflow 版 README（源仓库有 readme.md/readmeZh.md）；建议补运行说明 + 磁盘余量 ≥20GB 提醒。
+
+**未运行时验证项（诚实声明）：** 单样本失败不拖垮其余样本（`errorStrategy='finish'`）仅经配置确认、未做运行时注入测试；完整 `-resume` 干净复现因磁盘曾满未闭环（代码已按 F19/F20 修复并编译通过）。
