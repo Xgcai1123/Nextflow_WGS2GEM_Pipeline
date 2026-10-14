@@ -1,0 +1,9 @@
+name: spades
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  # osx-arm64 平台 conda 上无 3.x 版本，从 4.0.0 开始可用
+  # No 3.x builds on osx-arm64; 4.0.0+ is the minimum available
+  - spades=4.0.0

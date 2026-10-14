@@ -1,0 +1,15 @@
+name: busco
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  # busco 6.0/6.1 在 conda 上硬 pin sepp==4.5.5，而该版本已从 conda 下架
+  # （现只剩 4.5.6），导致 osx-arm64 无法求解。降级到 5.8.3：
+  # 基因组模式 + 固定谱系（enterobacterales_odb10）功能等同；sepp 仅在
+  # --auto-lineage 时才需要，本管线不用。
+  # / busco 6.0/6.1 hard-pin sepp==4.5.5, which no longer exists on conda
+  # (only 4.5.6 remains), so osx-arm64 cannot solve. Pin 5.8.3 instead —
+  # equivalent for genome mode + fixed lineage; sepp is only needed for
+  # --auto-lineage, which this pipeline does not use.
+  - busco=5.8.3

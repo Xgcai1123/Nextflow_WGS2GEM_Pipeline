@@ -1,0 +1,301 @@
+# =============================================================================
+# MultiQC configuration — WGSpipeline
+# =============================================================================
+# Loaded explicitly by `rule multiqc` via `-c multiqc_config.yaml`.
+#
+# This file does one thing: surface metrics that MultiQC's built-in modules cannot
+# show, via the `custom_content` module. The data files are produced by
+# `scripts/multiqc_extras.py` into `reports/multiqc/custom_content/`, which is
+# passed to multiqc as an extra search path.
+#
+# Everything in this file is rendered into the MultiQC report, so all
+# user-visible strings are English.
+#
+# Why custom content is needed:
+#   - No MEMOTE module exists in MultiQC (180+ supported tools, memote is not one).
+#   - No CarveMe module exists in MultiQC either.
+#   - The built-in QUAST module hard-codes General Stats to N50 + Total length;
+#     L50 / contig count / GC% cannot be added through configuration.
+#   - Per-step runtimes (Snakemake benchmark) belong to no module.
+#
+# Contract: every `custom_data` key needs a same-named entry under `sp`, otherwise
+# it is never parsed.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Software Versions section
+# -----------------------------------------------------------------------------
+# The "Software Versions" section is only filled by modules that call
+# BaseMultiqcModule.add_software_version() -> report.software_versions. Of the
+# tools this pipeline runs, only the FastQC and BUSCO modules do that; the QUAST
+# module does not, and Trimmomatic / SPAdes / Bakta / CarveMe / MEMOTE have no
+# MultiQC module in their search path at all.
+#
+# MultiQC reads this section through its official hook, so no plugin is needed:
+#   multiqc/utils/software_versions.py :: update_versions_from_config()
+#   which reads `config.software_versions`
+# (config_defaults.yaml ships `software_versions: {}` as the empty default.)
+#
+# How names are matched: each group name is compared against the names of the
+# modules that actually ran, after normalisation (lowercase, spaces/'-'/'_'
+# removed). A match merges the entry into that module and the group is displayed
+# under the module's own name; anything else becomes its own group row and the
+# table gains a "Group" column.
+#
+# Versions are quoted on purpose: this file goes through MultiQC's normal YAML
+# loader, so an unquoted 1.10 would be parsed as the float 1.1 and rejected
+# ("Version must be a string", validate_software_versions -> _filter_list).
+# The alternative mechanism (`*_mqc_versions.yaml` picked up by the
+# search_patterns.yaml `software_versions` pattern) uses yaml.BaseLoader and is
+# not affected, but quoting is kept here for consistency.
+#
+# Keep in sync with envs/*.yaml, which are the source of truth for these pins.
+# -----------------------------------------------------------------------------
+software_versions:
+  # These three match a module that ran, so they merge into its version entry.
+  FastQC:
+    fastqc: "0.12.1"
+  BUSCO:
+    busco: "5.8.3"
+  QUAST:
+    quast: "5.2.0"
+  # No module reports these, so each group is listed on its own.
+  Trimmomatic:
+    trimmomatic: "0.39"
+    openjdk: "17"
+  SPAdes:
+    spades: "4.0.0"
+  Bakta:
+    bakta: "1.11.4"
+    pyhmmer: "0.10.15"
+  CarveMe:
+    carveme: "1.6.6"
+    diamond: "2.2.8"
+    pyscipopt: "5.7.1"
+    scip: "9.2.4"
+  MEMOTE:
+    memote: "0.17.0"
+  # Pipeline drivers.
+  Snakemake:
+    snakemake: "9.25.2"
+  MultiQC:
+    multiqc: "1.21"
+
+custom_data:
+
+  # ---------------------------------------------------------------------------
+  # 1) Extra QUAST metrics -> General Statistics table
+  #    Data source: quast_generalstats.tsv (parsed from QUAST report.tsv)
+  # ---------------------------------------------------------------------------
+  assembly_generalstats:
+    section_name: "Assembly metrics (QUAST)"
+    plot_type: "generalstats"
+    file_format: "tsv"
+    namespace: "QUAST"
+    # NOTE: for generalstats sections MultiQC 1.21 reads `pconfig`, while newer
+    # versions (>= 1.35) read `headers` (falling back to `pconfig`). Both keys are
+    # set, sharing one definition via a YAML anchor. With `headers` alone on 1.21
+    # the column titles silently degrade to the raw column names.
+    pconfig: &assembly_generalstats_columns
+      L50:
+        title: "L50"
+        description: "Number of contigs longer than or equal to N50, i.e. the minimum number of contigs that cover 50% of the assembly. MultiQC's built-in QUAST General Stats does not expose this column."
+        min: 0
+        scale: "RdYlGn-rev"
+        format: "{:,.0f}"
+      contigs:
+        title: "# contigs"
+        description: "Total number of contigs. QUAST runs with --min-contig 0, so contigs shorter than 500 bp are included."
+        min: 0
+        scale: "RdYlGn-rev"
+        format: "{:,.0f}"
+      gc_percent:
+        title: "GC (%)"
+        description: "GC content of the assembly."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "YlGn"
+        format: "{:,.2f}"
+    headers: *assembly_generalstats_columns
+
+  # ---------------------------------------------------------------------------
+  # 2) CarveMe draft model size -> General Statistics table
+  #    Data source: carveme_modelstats.tsv (parsed from the SBML model)
+  # ---------------------------------------------------------------------------
+  carveme_modelstats:
+    section_name: "CarveMe: draft model"
+    plot_type: "generalstats"
+    file_format: "tsv"
+    namespace: "CarveMe"
+    # Same pconfig/headers pairing as assembly_generalstats above.
+    pconfig: &carveme_generalstats_columns
+      reactions:
+        title: "reactions"
+        description: "Number of reactions in the CarveMe draft model."
+        min: 0
+        scale: "YlGn"
+        format: "{:,.0f}"
+      metabolites:
+        title: "metabolites"
+        description: "Number of metabolites (SBML species) in the CarveMe draft model."
+        min: 0
+        scale: "YlGn"
+        format: "{:,.0f}"
+    headers: *carveme_generalstats_columns
+
+  # ---------------------------------------------------------------------------
+  # 3) CarveMe draft model size -> table section (adds genes + compartments)
+  #    A separate file from carveme_modelstats.tsv on purpose: two search
+  #    patterns on one file silently kills the generalstats section (see
+  #    docs/known-issues.md #3).
+  # ---------------------------------------------------------------------------
+  carveme_summary:
+    section_name: "CarveMe: draft model size"
+    description: "Size of the draft genome-scale model built by CarveMe, parsed directly from the SBML file. Model quality is scored separately by MEMOTE."
+    plot_type: "table"
+    file_format: "tsv"
+    pconfig:
+      id: "carveme_summary_table"
+      col1_header: "Sample"
+    headers:
+      reactions:
+        title: "Reactions"
+        description: "Number of reactions. CarveMe draft models are usually larger than manually curated ones."
+        min: 0
+        format: "{:,.0f}"
+      metabolites:
+        title: "Metabolites"
+        description: "Number of metabolites (SBML species)."
+        min: 0
+        format: "{:,.0f}"
+      genes:
+        title: "Genes"
+        description: "Number of unique gene products referenced by reactions in the model."
+        min: 0
+        format: "{:,.0f}"
+      compartments:
+        title: "Compartments"
+        description: "Number of compartments. CarveMe builds a three-compartment model (cytosol / periplasm / extracellular) for Gram-negative input, two for Gram-positive input."
+        min: 0
+        format: "{:,.0f}"
+
+  # ---------------------------------------------------------------------------
+  # 4) MEMOTE score table
+  #    Data source: models/memote/<sample>/memote_summary.tsv (produced by rule memote)
+  #    Columns: total score plus each scored section of the memote test suite.
+  # ---------------------------------------------------------------------------
+  memote_summary:
+    section_name: "MEMOTE: Model Quality"
+    plot_type: "table"
+    file_format: "tsv"
+    pconfig:
+      id: "memote_summary_table"
+      col1_header: "Sample"
+    headers:
+      "Total score":
+        title: "Total score"
+        description: "MEMOTE weighted total score (section scores weighted with the memote defaults)."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+      consistency:
+        title: "Consistency"
+        description: "Stoichiometric consistency, reaction mass and charge balance, disconnected and unbounded reactions."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+      annotation_met:
+        title: "Annotation · metabolites"
+        description: "Metabolite annotation: presence, correct identifiers, namespace consistency."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+      annotation_rxn:
+        title: "Annotation · reactions"
+        description: "Reaction annotation: presence, correct identifiers, namespace consistency."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+      annotation_gene:
+        title: "Annotation · genes"
+        description: "Gene product annotation: presence and correct identifiers."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+      annotation_sbo:
+        title: "Annotation · SBO"
+        description: "Whether objects carry an SBO term and whether the term is used appropriately."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+
+  # ---------------------------------------------------------------------------
+  # 5) MEMOTE total score -> General Statistics table
+  #    Read from its own memote_score.tsv, NOT from memote_summary.tsv: pointing
+  #    two search patterns at one file makes MultiQC silently drop the
+  #    generalstats section (observed, see docs/known-issues.md #3).
+  # ---------------------------------------------------------------------------
+  memote_score:
+    section_name: "MEMOTE: Model Quality"
+    plot_type: "generalstats"
+    file_format: "tsv"
+    namespace: "MEMOTE"
+    # Same as assembly_generalstats: provide both `pconfig` (1.21) and `headers`.
+    pconfig: &memote_score_columns
+      "Total score":
+        title: "MEMOTE score"
+        description: "MEMOTE total score for metabolic model quality (0-100%)."
+        min: 0
+        max: 100
+        suffix: "%"
+        scale: "RdYlGn"
+        format: "{:,.1f}"
+    headers: *memote_score_columns
+
+  # ---------------------------------------------------------------------------
+  # 6) Per-step runtimes
+  #    Data source: benchmarks/**/*.tsv (wall time written by Snakemake's
+  #    `benchmark:` directive) -> pipeline_runtime.tsv.
+  #    Rows = samples, columns = steps in seconds; steps without per-sample output
+  #    (multiqc) are summarised into an "all samples" row.
+  # ---------------------------------------------------------------------------
+  pipeline_runtime:
+    section_name: "Pipeline: step runtimes"
+    description: "Wall time per pipeline step in seconds, taken from the Snakemake benchmark records. The two FastQC reads of a sample are summed into a single step."
+    plot_type: "table"
+    file_format: "tsv"
+    pconfig:
+      id: "pipeline_runtime_table"
+      col1_header: "Sample"
+
+# -----------------------------------------------------------------------------
+# Search patterns: keys must match the custom_data keys above.
+# -----------------------------------------------------------------------------
+sp:
+  assembly_generalstats:
+    fn: "quast_generalstats.tsv"
+  carveme_modelstats:
+    fn: "carveme_modelstats.tsv"
+  # Must be a different file from carveme_modelstats (see the note above).
+  carveme_summary:
+    fn: "carveme_summary.tsv"
+  memote_summary:
+    fn: "memote_summary.tsv"
+  # Must be a different file from memote_summary (same reason).
+  memote_score:
+    fn: "memote_score.tsv"
+  pipeline_runtime:
+    fn: "pipeline_runtime.tsv"

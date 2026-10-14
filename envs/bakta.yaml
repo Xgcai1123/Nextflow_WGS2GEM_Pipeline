@@ -1,0 +1,18 @@
+name: bakta
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  # db/bakta/db-light 是 v6.0，version.json 要求 software-min: 1.11.0
+  # / db/bakta/db-light is v6.0; version.json requires software-min: 1.11.0
+  # bakta=1.11.4 是 1.11 系列最新 patch，与 db v6.0 兼容。
+  # / bakta=1.11.4 is the latest 1.11 patch, compatible with db v6.0.
+  # 关键：必须 pin pyhmmer=0.10.15。bakta 1.11.x 是为 pyhmmer 0.10.x 写的
+  # （hit.name / hmm_name / hmm_accession 返回 bytes）；pyhmmer 0.11+ 改成 str，
+  # 会让 bakta 在 CDS 质控阶段 `xxx.decode()` 抛 AttributeError。
+  # / CRITICAL: pin pyhmmer=0.10.15. bakta 1.11.x was written for pyhmmer 0.10.x
+  # (hit.name / hmm_name / hmm_accession return bytes). pyhmmer 0.11+ returns str,
+  # which makes bakta's `xxx.decode()` crash during CDS spurious detection.
+  - bakta=1.11.4
+  - pyhmmer=0.10.15

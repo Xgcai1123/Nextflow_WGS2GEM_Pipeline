@@ -1,0 +1,9 @@
+name: memote
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # memote 依赖 cobra（含 glpk 求解器）跑 FBA/增长相关测试
+  # memote pulls cobra (with glpk) for FBA/growth-related tests
+  - memote=0.17.0

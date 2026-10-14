@@ -1,0 +1,505 @@
+// ============================================================
+// WGSpipeline-nextflow — Nextflow DSL2 port (bacterial WGS pipeline)
+// Milestone 1: sample-sheet validation + FASTQC_RAW + TRIMMOMATIC +
+//              FASTQC_TRIMMED. Later milestones add SPADES/QUAST/BUSCO/
+//              BAKTA/CARVEME/MEMOTE/MULTIQC (design doc §7/§8).
+// Syntax target: Nextflow >= 25.10 (strict syntax, M0 findings F1/F2/F3).
+// ============================================================
+
+process FASTQC_RAW {
+    tag "${sample}_${read}"
+    conda "${params.envs_dir}/fastqc.yaml"
+    cpus 4
+    publishDir "${params.raw_qc_dir}", mode: 'copy', overwrite: true
+
+    input:  tuple val(sample), val(read), path(fq)
+    output: tuple val(sample), val(read),
+            path("${sample}_${read}_fastqc.zip"), path("${sample}_${read}_fastqc.html")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/fastqc_raw
+    # fastqc 0.12 on macOS sometimes exits non-zero even when outputs are
+    # written; `[ -f <html> ]` is the same guard as the snakefile. A true
+    # failure (no output) still propagates as a non-zero exit.
+    fastqc ${fq} -o . --threads ${task.cpus} \\
+        > ${params.logs_dir}/fastqc_raw/${sample}_${read}.log 2>&1 \\
+        || [ -f ${sample}_${read}_fastqc.html ]
+    bench_finish fastqc_raw ${sample}_${read}
+    """
+
+    stub:
+    """
+    touch ${sample}_${read}_fastqc.zip ${sample}_${read}_fastqc.html
+    """
+}
+
+process FASTQC_TRIMMED {
+    tag "${sample}_${read}"
+    conda "${params.envs_dir}/fastqc.yaml"
+    cpus 4
+    publishDir "${params.trim_qc_dir}", mode: 'copy', overwrite: true
+
+    input:  tuple val(sample), val(read), path(fq)
+    output: tuple val(sample), val(read),
+            path("${sample}_R${read}_paired_fastqc.zip"), path("${sample}_R${read}_paired_fastqc.html")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/fastqc_trimmed
+    fastqc ${fq} -o . --threads ${task.cpus} \\
+        > ${params.logs_dir}/fastqc_trimmed/${sample}_${read}.log 2>&1 \\
+        || [ -f ${sample}_R${read}_paired_fastqc.html ]
+    bench_finish fastqc_trimmed ${sample}_${read}
+    """
+
+    stub:
+    """
+    touch ${sample}_R${read}_paired_fastqc.zip ${sample}_R${read}_paired_fastqc.html
+    """
+}
+
+process TRIMMOMATIC {
+    tag "${sample}"
+    conda "${params.envs_dir}/trimmomatic.yaml"
+    cpus params.threads_default
+    publishDir "${params.trim_dir}", mode: 'copy', overwrite: true
+
+    input:  tuple val(sample), path(fq1), path(fq2)
+    output: tuple val(sample),
+            path("${sample}_R1_paired.fastq.gz"),    path("${sample}_R2_paired.fastq.gz"),
+            path("${sample}_R1_unpaired.fastq.gz"),  path("${sample}_R2_unpaired.fastq.gz")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/trimmomatic
+
+    # Adapter file: param wins (snakefile semantics), fall back to the copy
+    # shipped in the conda env.
+    ADAPTERS="${params.trimmomatic_adapters}"
+    [ -n "\$ADAPTERS" ] || ADAPTERS="\${CONDA_PREFIX}/share/trimmomatic/adapters/TruSeq3-PE.fa"
+
+    trimmomatic PE -threads ${task.cpus} -phred33 ${fq1} ${fq2} \\
+        ${sample}_R1_paired.fastq.gz ${sample}_R1_unpaired.fastq.gz \\
+        ${sample}_R2_paired.fastq.gz ${sample}_R2_unpaired.fastq.gz \\
+        ILLUMINACLIP:\$ADAPTERS:2:30:10 \\
+        LEADING:${params.trim.leading} TRAILING:${params.trim.trailing} \\
+        SLIDINGWINDOW:${params.trim.slidingwindow} MINLEN:${params.trim.minlen} \\
+        > ${params.logs_dir}/trimmomatic/${sample}.log 2>&1
+    bench_finish trimmomatic ${sample}
+    """
+
+    stub:
+    """
+    touch ${sample}_R1_paired.fastq.gz ${sample}_R2_paired.fastq.gz
+    touch ${sample}_R1_unpaired.fastq.gz ${sample}_R2_unpaired.fastq.gz
+    """
+}
+
+process SPADES {
+    tag "${sample}"
+    conda "${params.envs_dir}/spades.yaml"
+    cpus params.threads_default
+    // F15: 26.x pattern does NOT strip the matched prefix -> saveAs strips 'out/'
+    publishDir(path: { "${params.assembly_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:  tuple val(sample), path(r1_paired), path(r2_paired)
+    output: tuple val(sample), path("out/contigs.fasta")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/spades
+    mkdir -p out
+    # Fresh workdir replaces the snakefile's `rm -rf outdir` (SPAdes refuses
+    # to run into an existing -o directory).
+    spades.py -1 ${r1_paired} -2 ${r2_paired} -o out \\
+        --threads ${task.cpus} ${params.spades_careful} \\
+        > ${params.logs_dir}/spades/${sample}.log 2>&1
+    bench_finish spades ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/contigs.fasta
+    """
+}
+
+process QUAST {
+    tag "${sample}"
+    conda "${params.envs_dir}/quast.yaml"
+    cpus 1
+    // F15: saveAs strips 'out/' so reports land directly in quast/<sample>/
+    publishDir(path: { "${params.quast_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:  tuple val(sample), path(contigs)
+    output: tuple val(sample), path("out/report.html"), path("out/report.txt"), path("out/report.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/quast
+    mkdir -p out
+    # PITFALL (kept): --labels is mandatory -- input is always contigs.fasta,
+    # without it every sample is called "contigs" in QUAST/MultiQC.
+    # PITFALL (kept): pip quast 5.2.0 only ships the quast.py entry point
+    # (bare `quast` exits 127).
+    quast.py ${contigs} -o out \\
+        --labels ${sample} \\
+        --min-contig ${params.quast_min_contig} \\
+        --threads 1 > ${params.logs_dir}/quast/${sample}.log 2>&1
+    bench_finish quast ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/report.html out/report.txt out/report.tsv
+    """
+}
+
+process BUSCO {
+    tag "${sample}"
+    conda "${params.envs_dir}/busco.yaml"
+    cpus 4
+    // F15: saveAs strips 'out/' -> out/<sample>/... lands in busco/<sample>/...
+    publishDir "${params.busco_dir}", pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename }
+
+    input:  tuple val(sample), path(contigs)
+    output: tuple val(sample),
+            path("out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.json"),
+            path("out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.txt")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/busco
+    mkdir -p out
+    # PITFALL (kept): bin/busco's shebang resolves via PATH; invoke with the
+    # conda env's own python3 explicitly.
+    "\${CONDA_PREFIX}/bin/python3" "\${CONDA_PREFIX}/bin/busco" \\
+        -i ${contigs} -m genome \\
+        -l ${params.busco_lineage} \\
+        -o ${sample} --out_path out \\
+        --cpu ${task.cpus} \\
+        --download_path ${params.busco_db} \\
+        > ${params.logs_dir}/busco/${sample}.log 2>&1
+    bench_finish busco ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out/${sample}
+    touch out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.json
+    touch out/${sample}/short_summary.specific.${params.busco_lineage}.${sample}.txt
+    """
+}
+
+process BAKTA {
+    tag "${sample}"
+    conda "${params.envs_dir}/bakta.yaml"
+    cpus 4
+    publishDir(path: { "${params.annot_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:  tuple val(sample), path(contigs), path(db_version)
+    output: tuple val(sample),
+            path("out/${sample}.gff3"), path("out/${sample}.faa"), path("out/${sample}.tsv"),
+            path("out/${sample}.ffn"),  path("out/${sample}.gbff"), path("out/${sample}.txt")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/bakta
+    mkdir -p out
+
+    # Prepend the AMR-guard wrapper dir so it shadows the conda bakta entry
+    # point (upstream ncbi/amr#191: one protein with overlapping NCBIFAM hits
+    # kills the whole run).
+    export PATH="${params.scripts_dir}/bin:\$PATH"
+
+    # D8 (kept): the snakefile's `2> >(tee ...)` process substitution is dropped;
+    # Nextflow captures stdout+stderr natively in .command.log, and we merge them
+    # into the same log (progress bar goes non-tty, cosmetic only).
+    bakta --db ${params.bakta_db} \\
+        --prefix ${sample} \\
+        --output out \\
+        --threads ${task.cpus} \\
+        --force --skip-plot ${contigs} \\
+        > ${params.logs_dir}/bakta/${sample}.log 2>&1
+    bench_finish bakta ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/${sample}.gff3 out/${sample}.faa out/${sample}.tsv out/${sample}.ffn out/${sample}.gbff out/${sample}.txt
+    """
+}
+
+process CARVEME {
+    tag "${sample}"
+    conda "${params.envs_dir}/carveme.yaml"
+    cpus 4
+    publishDir(path: { "${params.carveme_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:  tuple val(sample), path(faa)
+    output: tuple val(sample), path("out/${sample}.xml"), path("out/${sample}.faa"), path("out/${sample}.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/carveme
+    mkdir -p out
+
+    # CRITICAL (docs/known-issues.md #5): carve derives its diamond output path
+    # from the input path (stem + '.tsv'). Feeding bakta's faa directly would
+    # overwrite annotation/bakta/<sample>/<sample>.tsv. Always carve this staged
+    # private copy so the intermediate lands in CarveMe's own directory.
+    cp ${faa} out/${sample}.faa
+    carve out/${sample}.faa -o out/${sample}.xml \\
+        --solver ${params.carveme_solver} \\
+        --verbose > ${params.logs_dir}/carveme/${sample}.log 2>&1
+    bench_finish carveme ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/${sample}.xml out/${sample}.faa out/${sample}.tsv
+    """
+}
+
+process MEMOTE {
+    tag "${sample}"
+    conda "${params.envs_dir}/memote.yaml"
+    cpus 4
+    publishDir(path: { "${params.memote_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:  tuple val(sample), path(model)
+    output: tuple val(sample), path("out/index.html"),
+            path("out/memote_result.json"), path("out/memote_summary.tsv")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}/memote
+    mkdir -p out
+    # PITFALL (kept): invoke with the conda env's own python3 (cobra module).
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/memote_report.py ${model} \\
+        --outdir out --sample ${sample} --solver ${params.memote_solver} \\
+        > ${params.logs_dir}/memote/${sample}.log 2>&1
+    bench_finish memote ${sample}
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/index.html out/memote_result.json out/memote_summary.tsv
+    """
+}
+
+process MULTIQC {
+    tag "${report_name}"
+    conda "${params.envs_dir}/fastqc.yaml"
+    cpus 1
+    publishDir "${params.multiqc_dir}", mode: 'copy', overwrite: true
+
+    input:
+    val  report_name             // "multiqc_report" + optional tag (F19: computed in
+                                 // workflow.main; process directives can't see runtime
+                                 // params mutation, so pass it as a channel input)
+    val  samples                 // List<String>: cohort, from the sheet
+    val  upstream                // collected trigger: all upstream steps done
+    path multiqc_config
+    path multiqc_config_extra    // presentation overlay: pipeline section order +
+                                 // full MEMOTE HTML embedding (F21)
+
+    output:
+    path("${report_name}.html")
+
+    script:
+    """
+    source ${params.bin_dir}/task_env.sh
+    export BENCH_DIR=${params.bench_dir}
+    bench_start
+    mkdir -p ${params.logs_dir}
+
+    # ---- 1. custom content（先清空再生成：数据源缺失时脚本会跳过写文件，
+    #          残留 TSV 会把上一个更大队列的样本"泄漏"进本次报告）----
+    rm -rf ${params.cc_dir}
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/multiqc_extras.py \\
+        --samples-tsv ${params.samples_tsv} \\
+        --quast-dir ${params.quast_dir} \\
+        --carveme-dir ${params.carveme_dir} \\
+        --memote-dir ${params.memote_dir} \\
+        --bench-dir ${params.bench_dir} \\
+        --outdir ${params.cc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    # ---- 2. BUSCO 摘要暂存（按样本表软链，不 glob 整个 busco 目录）----
+    rm -rf busco_stage
+    mkdir -p busco_stage
+    for s in ${samples.join(' ')}; do
+        set -- ${params.busco_dir}"/\$s"/short_summary.specific.*.txt
+        if [ -f "\$1" ]; then
+            ln -sf "\$1" busco_stage/short_summary_"\$s".txt
+        fi
+    done
+
+    # ---- 2b. MEMOTE 完整报告内嵌段（每样本一个 *_mqc.html；
+    #          MEMOTE 是自带 CSS/JS 的完整页面，这里包成独立 iframe，避免污染本报告）----
+    rm -rf memote_html
+    mkdir -p memote_html
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/memote_html_section.py \\
+        --memote-dir ${params.memote_dir} \\
+        --samples "${samples.join(' ')}" \\
+        --outdir memote_html \\
+        --report-dir ${params.multiqc_dir} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    # ---- 3. 只喂本队列的显式文件（不是目录！）----
+    qc_files=""
+    for s in ${samples.join(' ')}; do
+        qc_files="\$qc_files ${params.raw_qc_dir}/\${s}_1_fastqc.zip ${params.raw_qc_dir}/\${s}_2_fastqc.zip"
+        qc_files="\$qc_files ${params.trim_qc_dir}/\${s}_R1_paired_fastqc.zip ${params.trim_qc_dir}/\${s}_R2_paired_fastqc.zip"
+        qc_files="\$qc_files ${params.quast_dir}/\${s}/report.tsv"
+    done
+
+    # -c twice: the reused config first, the presentation overlay second.
+    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html \\
+        -c ${multiqc_config} \\
+        -c ${multiqc_config_extra} \\
+        -o . -f -n ${report_name} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    bench_finish multiqc ""
+    """
+
+    stub:
+    """
+    touch ${report_name}.html
+    """
+}
+
+workflow {
+    main:
+    // ---- sample sheet: parse + validate (M0 F1: must live here, first,
+    //      before any process invocation; error() aborts before any task) ----
+    def sheet_file = file(params.samples_tsv)
+    if (!sheet_file.exists()) { error "samples.tsv not found: ${sheet_file}" }
+
+    def sheet_lines = sheet_file.readLines()
+    def header      = sheet_lines[0].split('\t', -1)*.trim()
+    def REQUIRED    = ['sample', 'fq1', 'fq2']
+    def missing     = REQUIRED.findAll { !header.contains(it) }
+    if (missing) { error "samples.tsv: missing required column(s): ${missing}; found: ${header}" }
+
+    def SAMPLES     = [:]                 // LinkedHashMap: name -> [fq1, fq2, meta...]
+    def META_COLS   = header - REQUIRED
+    def name_re     = ~/[A-Za-z0-9._-]+/  // sample name becomes a path component
+    def resolve     = { fq, row ->        // hoisted (F9: typed/inner closures unsupported)
+        def p = fq.startsWith('/') ? fq : "${params.raw_dir}/${fq}"
+        if (!file(p).exists()) {
+            error "samples.tsv: row ${row}: fastq not found: ${p}"
+        }
+        p
+    }
+
+    sheet_lines[1..-1].eachWithIndex { line, idx ->
+        if (line.trim().isEmpty()) { return }            // skip blank lines
+        def cols = line.split('\t', -1)*.trim()
+        if (cols.size() != header.size()) {
+            error "samples.tsv: row ${idx + 2}: expected ${header.size()} fields, got ${cols.size()}"
+        }
+        def rec  = [header, cols].transpose().collectEntries()
+        def name = rec.sample
+        if (!name || !name_re.matcher(name).matches()) {
+            error "samples.tsv: row ${idx + 2}: invalid sample name ${name}"
+        }
+        if (SAMPLES.containsKey(name)) { error "samples.tsv: duplicate sample name ${name}" }
+        SAMPLES[name] = [resolve.call(rec.fq1, idx + 2), resolve.call(rec.fq2, idx + 2)] + META_COLS.collect { rec[it] }
+    }
+    def SAMPLE_NAMES = SAMPLES.keySet() as List
+
+    // report_tag: same filename-safety check as the snakefile
+    def tag_re = ~/[A-Za-z0-9._-]+/
+    if (params.report_tag && !tag_re.matcher(params.report_tag).matches()) {
+        error "report_tag ${params.report_tag} may only use letters, digits, dot, underscore and dash"
+    }
+    params.report_name = "multiqc_report" + (params.report_tag ? "_${params.report_tag}" : "")
+    def report_name = params.report_name   // F19: local copy; process directives can't see runtime params mutation
+
+    // ---- M1 dataflow: FASTQC_RAW ∥ TRIMMOMATIC -> FASTQC_TRIMMED ----
+    // Channel.fromList: Channel.of(list) no longer splats a collection in 26.x
+    sample_ch = Channel.fromList(SAMPLE_NAMES).map { n ->
+        tuple(n, file(SAMPLES[n][0]), file(SAMPLES[n][1]))
+    }
+
+    FASTQC_RAW(sample_ch.flatMap { n, f1, f2 -> [tuple(n, '1', f1), tuple(n, '2', f2)] })
+
+    TRIMMOMATIC(sample_ch)
+    FASTQC_TRIMMED(TRIMMOMATIC.out.flatMap { n, r1p, r2p, r1u, r2u ->
+        [tuple(n, '1', r1p), tuple(n, '2', r2p)]
+    })
+
+    SPADES(TRIMMOMATIC.out.map { n, r1p, r2p, r1u, r2u -> tuple(n, r1p, r2p) })
+    QUAST(SPADES.out)
+    BUSCO(SPADES.out)
+    BAKTA(SPADES.out.map { n, contigs ->
+        tuple(n, contigs, file("${params.bakta_db}/version.json"))   // db-upgrade sentinel
+    })
+    CARVEME(BAKTA.out.map { n, gff3, faa, tsv, ffn, gbff, txt -> tuple(n, faa) })
+    MEMOTE(CARVEME.out.map { n, xml, faa, tsv -> tuple(n, xml) })
+
+    // dependency trigger: MULTIQC waits for all upstream steps (their outputs are
+    // read from repo paths by multiqc_extras.py / the BUSCO staging loop).
+    up_ok = Channel.empty()
+        .mix(FASTQC_RAW.out.map    { n, r, z, h -> z })
+        .mix(FASTQC_TRIMMED.out.map{ n, r, z, h -> z })
+        .mix(QUAST.out.map         { n, html, txt, tsv -> tsv })
+        .mix(BUSCO.out.map         { n, j, t -> t })
+        .mix(CARVEME.out.map       { n, xml, faa, tsv -> xml })
+        .mix(MEMOTE.out.map        { n, html, json, tsv -> tsv })
+        .collect()
+
+    MULTIQC(
+        report_name,                           // val: report filename (no runtime params mutation)
+        Channel.value(SAMPLE_NAMES),          // cohort == the sheet, never a dir scan
+        up_ok,
+        Channel.of(file(params.multiqc_config)),
+        Channel.of(file(params.multiqc_config_extra))
+    )
+
+    onComplete:
+    log.info "[WGSpipeline-nf] workflow dir = ${params.project_dir}"
+    log.info "[WGSpipeline-nf] report       = ${params.multiqc_dir}/${params.report_name}.html"
+    log.info "[WGSpipeline-nf] rerun a step = nextflow run . -resume (delete the output to force it)"
+}

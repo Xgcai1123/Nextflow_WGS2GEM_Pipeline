@@ -1,0 +1,37 @@
+# ---- Nextflow runtime / logs ------------------------------------------------
+# (unanchored on purpose: also covers m0probe/.nextflow and its logs)
+.nextflow/
+.nextflow.log*
+/work/
+/.nf-nextflow/
+
+# ---- Generated pipeline outputs (recreated by every run) --------------------
+# Anchored to the repository root so that nested paths such as m0probe/data/
+# are NOT ignored.
+/db/
+/data/
+/assembly/
+/annotation/
+/models/
+/reports/
+/logs/
+/benchmarks/
+
+# ---- Local sandbox caches ---------------------------------------------------
+.nxhome/
+.conda-pkgs/
+
+# ---- m0probe runtime artifacts (its sources ARE tracked) --------------------
+m0probe/work/
+m0probe/conda-cache/
+m0probe/published/
+
+# ---- Tooling / OS noise -----------------------------------------------------
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+report-*.html
+trace-*.txt
+timeline-*.html
+dag-*.html

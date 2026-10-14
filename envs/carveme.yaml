@@ -1,0 +1,21 @@
+name: carveme
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # CarveMe 重建代谢模型需要一个 MILP 求解器：
+  #   - 默认 CPLEX / Gurobi（需授权）
+  #   - 开源替代 SCIP（pyscipopt），运行 carveme rule 时传 --solver scip（见 snakefile 常量 CARVEME_SOLVER）
+  # 版本配对：pyscipopt 5.x 对应 SCIP 9.x（conda 上没有 SCIP 10.x，而 pyscipopt
+  # 6.x 需要 libscip.10.0）。此外必须显式加 scip 库包 —— conda 的 pyscipopt
+  # 不会自动带上 libscip。
+  # / CarveMe needs an MILP solver: CPLEX/Gurobi (licensed) by default, or the
+  # open-source SCIP via pyscipopt (the rule passes --solver scip). Version
+  # pairing: pyscipopt 5.x matches SCIP 9.x (no SCIP 10.x on conda; pyscipopt
+  # 6.x needs libscip.10.0). The `scip` library package must be listed
+  # explicitly because conda's pyscipopt does not pull in libscip.
+  - carveme=1.6.6
+  - diamond=2.2.8
+  - pyscipopt=5.7.1
+  - scip=9.2.4

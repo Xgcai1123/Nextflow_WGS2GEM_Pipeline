@@ -1,0 +1,17 @@
+name: quast
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # osx-arm64 上 conda 唯一的 quast=4.6.3 build 依赖 boost=1.66.0，
+  # 而该 boost 版本在 osx-arm64 conda-forge 上根本不存在，conda 解算器无法求解。
+  # 改走 pip：从 PyPI 装 quast=5.2.0，绕开 boost 1.66.0 限制。
+  # / osx-arm64 conda only has quast=4.6.3 (build py27pl526h3727419_2) which
+  # requires boost=1.66.0, but that boost version does not exist for osx-arm64.
+  # Solution: create a minimal Python env via conda, then `pip install quast`
+  # to bypass the broken conda dependency.
+  - python=3.10
+  - pip
+  - pip:
+      - quast==5.2.0
