@@ -1,0 +1,77 @@
+# ============================================================
+# CI -- regression guards for the pipeline itself.
+#
+# What runs here is exactly what a developer runs locally: this workflow only
+# installs Nextflow and calls tests/ci/*.sh, so the two cannot drift apart
+# (see tests/ci/README.md).
+#
+# No conda environment is built and no real tool is executed: the smoke checks
+# use `-stub-run` with conda disabled (tests/ci/ci.config), because all ten
+# processes carry a `stub:` block. The whole job set finishes in about a
+# minute per job. The full 10-step run against real data stays a manual, documented
+# acceptance test (docs/nextflow-port-design.md §14).
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Single place to bump Nextflow. Two constraints are coupled to this value:
+  #   - manifest.nextflowVersion in nextflow.config (>= 25.10.0)
+  #   - LINT_WARNING_BASELINE in tests/ci/run-lint.sh (warning counts are
+  #     version-specific; re-record it when bumping)
+  NEXTFLOW_VERSION: '26.10.0'
+  NXF_ANSI_LOG: 'false'
+
+jobs:
+  lint:
+    name: nextflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NEXTFLOW_VERSION }}
+          java-version: '21'
+      - name: Lint (no errors, no new warnings)
+        run: bash tests/ci/run-lint.sh
+
+  smoke:
+    name: compile + validation + DAG smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NEXTFLOW_VERSION }}
+          java-version: '21'
+      - name: Sample-sheet validation (preview + injected bad sheets)
+        run: bash tests/ci/run-preview.sh
+      - name: Disk pre-flight guard (F20)
+        run: bash tests/ci/run-disk-guard.sh
+      - name: Full 10-step DAG with stubs + output contract
+        run: bash tests/ci/run-stub-smoke.sh
+
+  failure-isolation:
+    name: injected single-sample failure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NEXTFLOW_VERSION }}
+          java-version: '21'
+      - name: Inject a failing sample; verify loud failure + -resume convergence
+        run: bash tests/ci/run-failure-isolation.sh

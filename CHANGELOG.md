@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Disk-space pre-flight check** (`main.nf`, `min_free_disk_gb`, default 20 GiB). The
+  workflow now resolves the filesystem of `work/` and of every output directory (via the
+  nearest existing ancestor, so a first run before any directory exists is still checked) and
+  **aborts before the first task** when a volume is below the floor. The error names the
+  shortfall and prints the directories that are safe to delete; `--min_free_disk_gb=0`
+  disables the check. This replaces the README-only reminder with an enforced guard for the
+  F20 incident (a full volume made SPAdes' internal `gzip -f -7` die mid read-correction with
+  OS return 1, broke `-resume` persistence, and inflated individual steps up to 17×). It
+  tripped for real on the development host during this work: the volume was at 98 % with
+  11.8 GiB free, and `nextflow run . -preview` was refused with the shortfall and the
+  safe-to-delete list.
+- **Continuous integration** (`.github/workflows/ci.yml`) — three jobs on every push and pull
+  request: `nextflow lint` (errors fail the build, warning count is ratcheted), a
+  compile/validation smoke test (`-preview` plus six malformed sample sheets that must each
+  abort before any task), a full 10-step DAG run with stubs that verifies the published output
+  contract (23 tasks) and that the validated output tree is never touched, and the injected
+  single-sample failure test below. No conda environment is built and no tool is executed:
+  the scripts take about 2 s (lint) to 35 s each, so the three jobs finish in about a minute.
+- **Tool-free check suite** (`tests/ci/`) — the CI jobs only call these scripts, so a local
+  `bash tests/ci/run-*.sh` performs exactly the same assertions as CI; see
+  `tests/ci/README.md`.
+
+### Changed
+
+- **Single-sample failure isolation is now measured, not assumed.** The port claimed
+  `process.errorStrategy = 'finish'` was the equivalent of Snakemake's `--keep-going`; an
+  injected failure (`tests/ci/run-failure-isolation.sh`) shows it is only partly equivalent.
+  Verified behaviour: a dead task always fails the run (exit 1, never swallowed); the failed
+  sample produces no downstream deliverables; work already finished for the healthy sample is
+  preserved and `-resume` converges without recomputing it. Not equivalent: `finish` waits for
+  already-running tasks and then stops — it does **not** start the remaining independent
+  branches. `ignore`, the only strategy that would, was measured to exit **0** with a dead
+  task and is therefore rejected (design doc D12). `README.md` and the design document now
+  state the measured semantics instead of the old claim.
+- The `-stub-run` smoke test is wired into `.gitignore`-protected scratch space
+  (`tests/ci/out/`): every output, log and benchmark directory is redirected there by
+  `tests/ci/ci.config`, so a check can never republish empty placeholders over validated
+  deliverables (F18).
+
 ### Removed
 
 - The presentation deck and its generator script
@@ -71,7 +112,11 @@ WGS-to-GEM pipeline.
 
 - **conda only** — Docker/Singularity profiles are not included.
 - **Single-sample failure isolation** (`errorStrategy = 'finish'`) is configured but has
-  not been exercised with an injected failing sample.
+  not been exercised with an injected failing sample. → **Resolved in
+  [Unreleased](#unreleased):** an injected failure now exercises it
+  (`tests/ci/run-failure-isolation.sh`, part of CI), and it verified the semantics are
+  narrower than Snakemake's `--keep-going` — see the *Changed* entry there and design doc
+  D12. The line is kept here because it was accurate for the `v0.1.0` release.
 - **Reference databases are not bundled** — `--raw_dir`, `--bakta_db` and `--busco_db`
   must point at local copies (defaults assume a sibling `../WGSpipeline` checkout).
 - **Requires Nextflow ≥ 25.10** (strict syntax and the `onComplete:` section syntax used

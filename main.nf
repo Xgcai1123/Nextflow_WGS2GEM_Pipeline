@@ -411,8 +411,74 @@ process MULTIQC {
 
 workflow {
     main:
-    // ---- sample sheet: parse + validate (M0 F1: must live here, first,
-    //      before any process invocation; error() aborts before any task) ----
+    // ---- disk pre-flight (F20) --------------------------------------------
+    // A full volume does not fail loudly, it fails expensively: SPAdes' own
+    // `gzip -f -7` died mid read-correction with OS return 1 when the host had
+    // ~2 GB left, and a near-full disk was measured to inflate individual
+    // steps up to 17x. Refuse to start instead of losing hours of compute.
+    // Runs before the sample sheet so even a bad sheet cannot mask the cause.
+    def min_free_gb = (params.min_free_disk_gb ?: 0) as double
+    if (min_free_gb > 0) {
+        def disk_targets = [
+            'work dir'           : params.project_dir,
+            'raw read QC'        : params.raw_qc_dir,
+            'trimmed reads'      : params.trim_dir,
+            'assembly (SPAdes)'  : params.assembly_dir,
+            'annotation (Bakta)' : params.annot_dir,
+            'model (CarveMe)'    : params.carveme_dir,
+            'model (MEMOTE)'     : params.memote_dir,
+            'reports (MultiQC)'  : params.multiqc_dir,
+        ]
+        def volumes = [:]            // filesystem -> [anchor path, usable bytes, total bytes]
+        // publishDir targets may not exist yet on the first run, and the
+        // filesystem is decided by the nearest existing ancestor. Strict syntax
+        // forbids loops, so the ancestor chain is built declaratively
+        // (root -> ... -> full path) by injecting each name element.
+        def ancestors_of = { dir ->
+            def abs = java.nio.file.Paths.get(dir.toString()).toAbsolutePath().normalize()
+            def root = abs.getRoot()
+            if (root == null) { return [abs] }
+            // NB: `acc + p` would concatenate p's name elements (Path is
+            // Iterable); the extra [] forces List + List append semantics.
+            return abs.iterator().collect { it.toString() }
+                      .inject([root]) { acc, name -> acc + [acc.last().resolve(name)] }
+        }
+        def nearest_existing = { dir ->
+            return ancestors_of.call(dir).reverse().find { java.nio.file.Files.exists(it) }
+        }
+        disk_targets.each { label, dir ->
+            def anchor = nearest_existing.call(dir)
+            if (anchor == null) {
+                error "[disk-check] ${label}: no existing directory on the path of ${dir}"
+            }
+            def store = java.nio.file.Files.getFileStore(anchor)
+            if (!volumes.containsKey(store.name())) {
+                volumes[store.name()] = [anchor.toString(), store.getUsableSpace(), store.getTotalSpace()]
+            }
+        }
+        def too_full = []
+        volumes.each { fs, v ->
+            def free_gb  = v[1] / 1073741824
+            def total_gb = v[2] / 1073741824
+            log.info "[disk-check] ${fs}: ${String.format('%.1f', free_gb)} GiB free of " +
+                     "${String.format('%.1f', total_gb)} GiB (anchor ${v[0]})"
+            if (free_gb < min_free_gb) {
+                too_full << "${fs}: ${String.format('%.1f', free_gb)} GiB free < ${min_free_gb} GiB required (anchor ${v[0]})"
+            }
+        }
+        if (too_full) {
+            error """[disk-check] refusing to start: not enough free disk space.
+  ${too_full.join('\n  ')}
+
+  Free space first -- both directories below are regenerable, only time is lost:
+    rm -rf ${params.project_dir}/work             # Nextflow task cache
+    rm -rf ${params.project_dir}/.nextflow/conda  # conda environments
+  Or tune the threshold: --min_free_disk_gb=<GB>, or --min_free_disk_gb=0 to skip the check."""
+        }
+    }
+
+    // ---- sample sheet: parse + validate (M0 F1: must live here, before any
+    //      process invocation; error() aborts before any task) ----
     def sheet_file = file(params.samples_tsv)
     if (!sheet_file.exists()) { error "samples.tsv not found: ${sheet_file}" }
 

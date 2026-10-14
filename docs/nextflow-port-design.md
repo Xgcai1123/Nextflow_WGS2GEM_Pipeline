@@ -959,6 +959,19 @@ profiles {
   - 完整 HTML 页面（MEMOTE 的 Angular 报告，含 `<base href="/">` 与自带 `<style>/<script>`）**不能直接内联**：会与 MultiQC 页面互相污染。改包 `<iframe srcdoc="…">`——iframe 是独立文档（CSS/JS 隔离），`srcdoc` 让报告保持自包含。代价：报告 4.9 MB → 15.2 MB（两样本各约 5.2 MB 转义后）。
   - 验收：章节顺序 `fastqc → quast → busco → carveme_summary → memote_summary → memote_full_* → pipeline_runtime → multiqc_software_versions`；General Stats 列 `FastQC×6 → QUAST×5 → CarveMe×2 → MEMOTE×1`；报告内 `iframe srcdoc` ×2、`MemoteReportApp` ×2，且 MultiQC 页面 DOM 中不含 MEMOTE 的 `<base href="/">`（未污染）；`multiqc_data.json` 仍为 0.79 MB（HTML 内容不入数据文件）。
 
+- **F22 磁盘预检（把 F20 的"提醒"变成硬闸门，2026-10-14）**：`workflow.main` 开头检查 `work/` 与各输出目录所在卷的可用空间（`params.min_free_disk_gb`，默认 20 GiB，`0` 关闭），不足即 `error()` 中止。实测与语法坑：
+  - **严格语法无 `while`**（`while loops are no longer supported`），也**不能自递归闭包**（自引用报 `` `nearest_existing` is not defined ``）。"最近的存在祖先目录"改为声明式链路：`abs.iterator().collect{ it.toString() }.inject([root]){ acc, name -> acc + [acc.last().resolve(name)] }`，再 `reverse().find{ Files.exists(it) }`。
+  - **Groovy 陷阱**：`List + Path` **不是**追加元素——`Path` 实现 `Iterable`，会被当成 iterable 拼接，累加器退化成相对路径片段（实测 anchor 被解析成 `data`、`/` 这类错误值，且 `data` 恰好在 cwd 下存在→误判）。必须写 `acc + [path]` 强制 List+List 语义。
+  - `Files.getFileStore(path)` **要求路径存在**（不存在抛 `NoSuchFileException`，已用独立 Java 探针确认），所以必须先解析祖先；按 `FileStore.name()` 去重，同一文件系统只报一次。
+  - CI 配置 `tests/ci/ci.config` 通过 `params.ci_out` 重定向**所有** publishDir / logs / benchmarks / workDir，并在无 conda 的前提下用 `-stub-run` 跑全 DAG——这是 F18（stub 覆盖真实产物）在自动化里的防线，`run-stub-smoke.sh` 还用 `find -newer` 断言仓库根产物目录**一个文件都没被改写**。
+  - 三分支实测（`tests/ci/run-disk-guard.sh`）：阈值满足→打印 `[disk-check] <fs>: X.X GiB free of Y.Y GiB (anchor …)` 后继续；阈值不满足→**任何任务提交之前**中止（exit 1，无产物、无报告），消息给出缺口数值 + `rm -rf work` / `rm -rf .nextflow/conda` + `--min_free_disk_gb` 覆盖方式；`=0`→完全静默跳过。
+  - **真实触发（2026-10-14，本机收尾测试时）**：`/dev/disk3s5` 已用 98%、仅剩 **11.8 GiB**，默认 20 GiB 下限当场拒绝了 `nextflow run . -preview` 并列出可删项。F20 的设备条件仍在复现，这道闸门不是纸面功能。
+
+- **F23 `errorStrategy='finish'` ≠ Snakemake `--keep-going`（注入实测，2026-10-14）**：用配置层 `beforeScript` 让 `FASTQC_RAW (CI_B)` 真实 exit 1（`main.nf` 不携带任何测试钩子），实测：
+  - **`finish`**：run **exit 1**，失败不会被吞；失败样本下游**零产物**（无半成品模型/注释表）；健康样本已完成任务**保留**，`-resume` 收敛且不重算（日志 `Cached process > FASTQC_RAW (CI_A_1)`）。但**不会继续独立分支**——只等已在运行的任务结束即停（本次 4 个 FASTQC 提交后即 `Execution cancelled -- Finishing pending tasks before exit`）。故旧表述"其余样本照常完成"**不成立**，已改写为实测语义。
+  - **`ignore`**（唯一会继续独立分支的策略）：23 个任务全部提交、**exit 0**，死任务只留 `NOTE: Process ... Error is ignored`，原始产物留下空洞 → **静默成功**，不可作默认；作为负对照固化进 CI（`tests/ci/ignore-strategy.config`）。
+  - **`beforeScript` 不可插值进程输入**：它在**配置解析期**求值，此时 `sample`/`read` 尚不存在，严格解析器直接拒绝（`` `sample` is not defined ``）；写成普通字符串则**原样**进 `.command.run`（实测 `bad substitution`，且该行在 `nxf_stage` 之前执行）。注入器因此改从任务自身 wrapper 的 `### name:` 头读取 tag（`$0` = `.command.run`）。该头是 Nextflow 内部约定，所以测试**断言注入确实触发**：将来若头格式变化，注入静默失效→`run-failure-isolation.sh` 立刻转红，而不是假通过。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -973,6 +986,13 @@ nextflow run . -resume                  # 断点续跑（对应 Snakemake 缓存
 nextflow run . -preview                 # 不执行任务；26.x 不再渲染命令（见下注 F7）
 nextflow run . -stub                    # 真干跑（各 process 均有 stub: 块）；⚠️ 会以空文件覆盖已 publish 的真实产物（F18），仅限产物目录为空时使用
 nextflow run . -with-report -with-trace # 执行报告 + 资源/耗时 trace
+
+# 零成本自动检查（不建 conda 环境、不跑任何真实工具；实测单脚本 2–35 秒；CI 调用的就是这些脚本）
+bash tests/ci/run-lint.sh               # nextflow lint：0 error + 告警数棘轮
+bash tests/ci/run-preview.sh            # -preview 编译 + 6 个坏样本表必须在任何任务前失败
+bash tests/ci/run-disk-guard.sh         # F22 磁盘预检三分支
+bash tests/ci/run-stub-smoke.sh         # 全 10 步 -stub-run：23 任务 + 产物契约 + 不动根产物目录
+bash tests/ci/run-failure-isolation.sh  # F23 注入失败 + -resume 收敛 + ignore 负对照
 ```
 
 **M0 实测（F7）：** 26.x 的 `-preview` 会执行 workflow 语句（样本表校验生效）但**不再输出各 process 的渲染命令**；阶段 A 的"读渲染命令"改用 `-stub` 跑完后读 `work/**/.command.sh`（stub 模式下各任务目录仍生成命令脚本），或 `nextflow inspect`（M0 对最小探针返回空 `processes` 列表，M1 在真实项目上再验证其可用性）。
@@ -1008,9 +1028,14 @@ nextflow run . -resume
 
 ### 阶段 C：行为对拍
 1. `--report_tag cohort_b`：子集报告与全队列报告并存，互不覆盖，报告内容=样本表；
-2. 单样本失败：其余样本照常完成（errorStrategy `finish` 语义），失败样本重跑 `-resume` 后收敛；
+2. **单样本失败 —— ✅ 已用注入失败实测（2026-10-14，F23，`tests/ci/run-failure-isolation.sh`）**：`finish` 下 run exit 1、失败样本下游零产物、健康样本已完成任务保留且 `-resume` 收敛不重算；**但 `finish` 不继续独立分支**，旧表述"其余样本照常完成"不成立，已按实测改写（见 §18）；`ignore` 实测 exit 0（静默成功）→ 拒绝，负对照入 CI；
 3. 改 `multiqc_config.yaml` / `db/version.json` → `-resume` 自动重跑 MULTIQC / BAKTA；
 4. O157:H7 样本（SRR10194530）跑通 BAKTA——AMR-guard 路径生效的既有触发样本。
+
+### 阶段 D：每次 push 的自动化守卫（2026-10-14 起，`.github/workflows/ci.yml`）
+CI 只安装 Nextflow，然后调用 `tests/ci/run-*.sh`——**本地跑与 CI 跑是同一批断言**，不会漂移。
+lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（用 `-stub-run` 跑，确保"若校验没生效就一定会有任务被提交"）、F22 磁盘预检三分支、全 10 步 stub 干跑（23 任务 + 产物契约 + 根产物目录零改写）、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照。
+**不建 conda 环境、不跑真实工具**：实测 `run-lint` 2s / `run-stub-smoke` 8s / `run-disk-guard` 16s / `run-failure-isolation` 27s / `run-preview` 33s，三个 job 各自约 1 分钟内；真实数据的 10 步验收（阶段 B）仍是人工流程。
 
 ## 15. 风险登记表
 
@@ -1042,6 +1067,9 @@ nextflow run . -resume
 | D9 | 数据产物"workdir 写入 + publishDir 发布"；logs/benchmarks 直写仓库绝对路径（本地单机假设） | 已定 |
 | D10 | 代码写法按 Nextflow 26.x 严格语法修订：§6 校验代码进 `workflow.main`、§7 `onComplete` 改块内节语法、§8.3–8.8 publishDir 改闭包形式（依据 M0 实测 F1–F8） | 已定 |
 | D11 | trimmomatic adapter 优先级按 snakefile 语义：param 优先、空则 `$CONDA_PREFIX` 自带（修正 §8.2 草案 env-first 顺序） | 已定 |
+| D12 | 失败语义**保持** `errorStrategy = 'finish'`：失败必须响亮（exit 1）且不留半成品；实测它**不等价**于 `--keep-going`（不继续独立分支），唯一会继续的 `ignore` 会 exit 0 静默成功，故拒绝；补偿手段是"已完成任务保留 + `-resume` 收敛"，文档按实测措辞（F23） | 已定（2026-10-14 注入实测） |
+| D13 | F20 磁盘余量由 README 提醒改为 `workflow.main` 开头硬预检（`min_free_disk_gb`，默认 20 GiB，`0` 关闭）；逐个输出目录解析"最近存在祖先"的**文件系统**并去重，任务启动前中止 | 已定（2026-10-14 实测三分支） |
+| D14 | 回归守卫用 `tests/ci/*.sh` 承载、GitHub Actions 只做"装 Nextflow + 调脚本"：本地与 CI 同一批断言；全部用 `-stub-run` + 禁用 conda，真实数据验收仍人工 | 已定（2026-10-14） |
 
 ## 17. 里程碑与后续开放问题
 
@@ -1053,6 +1081,7 @@ nextflow run . -resume
 | 3 | 注释与建模：BAKTA(+guard) / CARVEME / MEMOTE | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；真实运行通过——**AMR-guard 在 O157:H7（SRR10194530）触发并成功兜底**（日志见 `[amr-guard] WARNING ... retrying chunk-wise`，bakta.tsv 完整产出）；**CarveMe 不覆盖 Bakta TSV**（坑位 #5：bakta tsv 首行 `# Annotated with Bakta` 完好，diamond 表落在 carveme 目录）；MEMOTE 评分 SRR1770413=68.0 / SRR10194530=67.7 |
 | 4 | 报告：MULTIQC + task_env 计时 | ✅ **完成（2026-10-14）**：custom content 6 个 TSV（carveme_modelstats/summary、memote_score/summary、pipeline_runtime、quast_generalstats）齐全；`benchmarks/` 含 multiqc.tsv + 22 个 per-sample 计时 TSV；报告内恰 2 个样本（cohort=样本表，不扫目录）。**排版（F21，用户要求）**：章节与 General Stats 列均按管线顺序（FastQC→QUAST→BUSCO→CarveMe→MEMOTE→耗时→版本），并把 MEMOTE 完整 `index.html` 以独立 iframe 内嵌进报告（报告 4.9 MB → 15.2 MB）。注：因 F19/F20，报告最终以与 process 完全一致的命令手动生成（见 §12.1 F20/F21） |
 | 5 | 全量对拍（阶段 B/C）+ 回写文档 + readme 补充 Nextflow 运行说明 | 对拍表全部通过 |
+| 6 | 防御性加固：磁盘硬预检（F22/D13）+ 每次 push 的 CI 回归守卫（阶段 D/D14）+ 单样本失败注入实测（F23/D12） | ✅ **完成（2026-10-14）**：预检三分支实测（满足/不满足/关闭）且不满足时在任何任务前中止；CI 3 个 job 全绿（lint 0 error + 告警棘轮、`-preview` + 6 坏样本表、F22 三分支、23 任务 stub 干跑 + 产物契约 + 根产物零改写、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照）；单样本失败从"未验证限制"变为"实测语义"，并更正了 `finish` ≠ `--keep-going` 的旧表述 |
 
 **开放问题：**
 1. 复用资产副本的同步机制：手动同步（记录来源 commit）还是 git submodule？（实施时定）
@@ -1070,6 +1099,7 @@ nextflow run . -resume
 - 组装大小与样本表物种（K-12 vs O157:H7）吻合；BUSCO 谱系 enterobacterales_odb10 正确；MEMOTE 评分 68.0 / 67.7（草稿 GEM 典型值）；
 - Trimmomatic/SPAdes/QUAST 与源仓库逐字节一致 → 无静默漂移；AMR-guard 正确处理 O157:H7 的 AMRFinderPlus 崩溃边缘用例。
 
-**易用性 —— 通过（一处缺口）。** 单入口 `nextflow run .`，conda 环境自动构建，`-profile standard/lowmem`，CLI 覆盖 params，samples.tsv 沿用源格式。**缺口**：新仓库尚无 Nextflow 版 README（源仓库有 readme.md/readmeZh.md）；建议补运行说明 + 磁盘余量 ≥20GB 提醒。
+**易用性 —— 通过（缺口已补）。** 单入口 `nextflow run .`，conda 环境自动构建，`-profile standard/lowmem`，CLI 覆盖 params，samples.tsv 沿用源格式。**原缺口已闭环（2026-10-14）**：已补 Nextflow 版 `README.md`（运行说明、参数表、产物布局、失败行为），磁盘余量 ≥20 GB 从"提醒"升级为**启动前硬预检**（F22/D13），并新增 `tests/ci/` 零成本检查套件与 GitHub Actions（阶段 D/D14）。
 
-**未运行时验证项（诚实声明）：** 单样本失败不拖垮其余样本（`errorStrategy='finish'`）仅经配置确认、未做运行时注入测试；完整 `-resume` 干净复现因磁盘曾满未闭环（代码已按 F19/F20 修复并编译通过）。
+**未运行时验证项（更新 2026-10-14）：** 单样本失败**已完成注入实测**（F23 + `tests/ci/run-failure-isolation.sh`，并已进 CI）；F20 磁盘预检已完成三分支实测（F22）。**仍有两点是诚实缺口**：(1) 完整 `-resume` 干净复现因磁盘曾满未闭环（代码已按 F19/F20 修复并编译通过）——CI 的 stub `-resume` 只验证了缓存的**调度与发布**语义，不是真实工具产物的复用；(2) 真实数据的 10 步运行在 CI 中**不跑**（依赖 conda 环境与参考库），仍是人工验收；自动化守卫覆盖的是逻辑回归，不是工具行为回归。
+**措辞更正（F23）：** 旧文档称 `errorStrategy='finish'` 即 `--keep-going`、失败样本之外"照常完成"——实测**不成立**（`finish` 只等已运行任务结束即停）。现在对外表述为：失败必定响亮、失败样本无半成品、已完成工作保留且 `-resume` 收敛；不承诺"同一次运行内继续独立分支"。

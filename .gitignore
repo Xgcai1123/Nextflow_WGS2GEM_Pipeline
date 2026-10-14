@@ -26,6 +26,11 @@ m0probe/work/
 m0probe/conda-cache/
 m0probe/published/
 
+# ---- CI runtime artifacts (tests/ci sources and fixtures ARE tracked) -------
+# Every output dir, the work cache and the log/benchmark dirs of a CI run are
+# redirected here by tests/ci/ci.config so no check can touch validated data.
+tests/ci/out/
+
 # ---- Tooling / OS noise -----------------------------------------------------
 __pycache__/
 *.pyc

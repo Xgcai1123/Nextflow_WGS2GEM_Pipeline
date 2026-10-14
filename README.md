@@ -37,8 +37,10 @@ assets (conda environments, helper scripts, MultiQC config) are byte-identical c
 - **Nextflow ≥ 25.10** (strict-syntax era; developed and validated on 26.10.0)
 - **conda** or **mamba** on `PATH` (all environments are created automatically)
 - **Java 17+** (bundled with the conda `nextflow` package if installed that way)
-- **Disk space**: allow **≥ 20 GB free** — SPAdes, Bakta and CarveMe write several GB of
-  intermediates, and a nearly-full volume slows them down dramatically (see *Performance*)
+- **Disk space**: allow **≥ 20 GB free** on the volume that holds `work/` and the output
+  directories. This is **enforced, not just documented**: the workflow refuses to start when
+  a volume is below the floor, names the shortfall, and prints what can safely be deleted. A
+  full volume fails in expensive ways — see *Performance* and *Failure behaviour*.
 - Reference databases (Bakta light DB, BUSCO lineage cache) are referenced via parameters and
   are **not** stored in this repository
 
@@ -75,6 +77,23 @@ It is validated **before any task starts**: missing columns, invalid sample name
 names, wrong field counts and missing FASTQ files all abort the run immediately with a
 row-specific message.
 
+### Verify without running the pipeline
+
+The repository ships a tool-free check suite — no conda environment is built and no tool is
+executed, because the ten processes run from their `stub:` blocks:
+
+```bash
+bash tests/ci/run-lint.sh                  # nextflow lint (errors + warning ratchet)
+bash tests/ci/run-preview.sh               # compile + sample-sheet validation, good and bad
+bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
+bash tests/ci/run-stub-smoke.sh            # full 10-step DAG + published output contract
+bash tests/ci/run-failure-isolation.sh     # injected single-sample failure + -resume
+```
+
+The same scripts run on every push
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)); [`tests/ci/README.md`](tests/ci/README.md)
+lists exactly what each one proves.
+
 ## Configuration
 
 All parameters live in `nextflow.config` and can be overridden with `--key=value`.
@@ -90,6 +109,7 @@ The most relevant ones:
 | `carveme_solver` | `scip` | `cplex`/`gurobi` need a licence |
 | `memote_solver` | `glpk` | solver used for MEMOTE FBA tests |
 | `quast_min_contig` | `0` | `0` = count every contig |
+| `min_free_disk_gb` | `20` | pre-flight floor, in GiB, on every volume that holds `work/` or an output directory; the run aborts before any task if a volume is below it. `0` disables the check |
 | `report_tag` | `""` | suffix for `multiqc_report[_tag].html` |
 
 ## Outputs
@@ -133,9 +153,30 @@ original Snakemake baseline. On a machine that is simultaneously running other h
 or with the disk nearly full, individual steps can take an order of magnitude longer
 (observed up to 17×) even though the pipeline itself is unchanged.
 
+The disk half of that observation is now a pre-flight check rather than advice: at ~2 GB free a
+full volume made SPAdes' own `gzip -f -7` die mid read-correction (OS return 1) and also broke
+`-resume` persistence, so the workflow refuses to start below `min_free_disk_gb` (default
+20 GiB) — before the first task, with the shortfall and the safe-to-delete directories printed.
+
 Note that the "step runtimes" table lists steps individually: steps that run in parallel
 (QUAST/BUSCO/Bakta, and the two samples) are counted separately, so the sum of a row is larger
 than the pipeline wall-clock time.
+
+## Failure behaviour
+
+Verified by injecting a real task failure (`tests/ci/run-failure-isolation.sh`), not inferred
+from configuration:
+
+- **A failing task always fails the run.** The pipeline exits non-zero; a dead task is never
+  swallowed, and no report is written that would suggest success.
+- **The failed sample leaves no partial deliverables.** Nothing downstream of it runs, so a
+  half-built model or annotation table cannot be mistaken for a result.
+- **Finished work survives.** After fixing the cause, `nextflow run . -resume` converges and
+  reuses the tasks that already completed for the healthy samples instead of recomputing them.
+- **In-run isolation is weaker than Snakemake's `--keep-going`.** Nextflow's
+  `errorStrategy = 'finish'` waits for already-running tasks and then stops; it does not start
+  the remaining independent branches. The only strategy that would continue them, `ignore`,
+  exits `0` with a dead task, so it is deliberately rejected. See design doc D12.
 
 ## Reproducibility
 
@@ -164,6 +205,8 @@ envs/                       conda environment definitions (8, byte-identical)
 scripts/                    helper scripts (byte-identical) + memote_html_section.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
 docs/                       design document, asset provenance, audit notes
+tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard, failure isolation)
+.github/workflows/ci.yml    runs tests/ci/ on every push and pull request
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
 ```
 
