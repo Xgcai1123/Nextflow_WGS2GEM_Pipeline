@@ -109,6 +109,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bash tests/ci/run-*.sh` performs exactly the same assertions as CI; see
   `tests/ci/README.md`.
 
+### Fixed
+
+- **The report's two disagreeing reaction counts are now explained where they appear.** The
+  CarveMe table reads its counts from the SBML file (2486 / 2478), while MEMOTE reports them
+  after cobra loads the model (2496 / 2488) — because cobra **creates an exchange reaction**
+  for 10 boundary metabolites the file leaves without one (`EX_na1_e`, `EX_ni2_e`, `EX_cd2_e`,
+  `EX_cm_e`, `EX_hg2_e`, `EX_fusa_e`, `EX_gbbtn_e`, `EX_novbcn_e`, `EX_doxrbcn_e`,
+  `EX_ttrcyc_e`). Both numbers are correct but measure different things, and the report
+  previously showed them side by side with no explanation. A `section_comments` entry in the
+  overlay now states it under the CarveMe section, so the reused `multiqc_extras.py` and
+  `multiqc_config.yaml` stay byte-identical (D4). Metabolite and gene counts agree exactly in
+  both. Side finding, recorded in F27: because `na1` and `ni2` are among those 10 reactions,
+  the growth check's medium maps only thanks to cobra's auto-creation — the model's exchange
+  set is "the file ∪ what cobra adds", not what the file alone contains.
+
 ### Changed
 
 - **MEMOTE figures corrected, and what that score does *not* cover.** `README.md` and the design

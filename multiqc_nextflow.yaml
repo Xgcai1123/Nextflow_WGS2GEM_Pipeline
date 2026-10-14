@@ -6,7 +6,7 @@
 #
 #   multiqc ... -c multiqc_config.yaml -c multiqc_nextflow.yaml
 #
-# It carries the four report-presentation requirements of the Nextflow port:
+# It carries the five report-presentation requirements of the Nextflow port:
 #
 #   1) Report sections are ordered by PIPELINE step, not alphabetically:
 #      FastQC -> QUAST -> BUSCO -> CarveMe -> MEMOTE -> runtimes -> versions.
@@ -42,6 +42,11 @@
 #      `sp:` entry, and a second `sp:` REPLACES (never merges) the block in the
 #      reused multiqc_config.yaml, silently dropping every existing
 #      custom-content section. Only its ordering anchor belongs here.
+#
+#   5) `section_comments` (F27) explains why the CarveMe table's reaction count
+#      differs from MEMOTE's "Total Reactions" card. Both are correct but measure
+#      different things, and a reader who sees 2486 in one place and 2496 in
+#      another deserves the reason next to the number rather than in a doc.
 # -----------------------------------------------------------------------------
 
 report_section_order:
@@ -82,3 +87,25 @@ table_columns_placement:
     metabolites: 310
   MEMOTE:                 # step 9    MEMOTE total score (key keeps its space)
     "Total score": 400
+
+# -----------------------------------------------------------------------------
+# Section comments (F27). Keyed by the section ANCHOR MultiQC sorts and renders
+# on (multiqc/modules/base_module.py: `self.comment = config.section_comments[
+# self.anchor]`), so they need no `sp:` entry.
+#
+# The CarveMe table reads its counts straight out of the SBML file, while MEMOTE
+# loads the same file with cobra -- and cobra CREATES an exchange reaction for
+# every boundary metabolite the file leaves without one. On the two v0.1.0 models
+# that is exactly 10 reactions (EX_na1_e, EX_ni2_e, EX_cd2_e, EX_cm_e, EX_hg2_e,
+# EX_fusa_e, EX_gbbtn_e, EX_novbcn_e, EX_doxrbcn_e, EX_ttrcyc_e), so the report
+# shows 2486 next to MEMOTE's 2496 with no explanation. Metabolite and gene
+# counts agree exactly; only reactions differ.
+# -----------------------------------------------------------------------------
+section_comments:
+  carveme_summary: >-
+    Reaction counts here are read from the SBML file itself, which is why they are
+    10 lower than MEMOTE's "Total Reactions" card: cobra creates an exchange
+    reaction for 10 boundary metabolites that the file leaves without one
+    (EX_na1_e, EX_ni2_e, EX_cd2_e, EX_cm_e, EX_hg2_e, EX_fusa_e, EX_gbbtn_e,
+    EX_novbcn_e, EX_doxrbcn_e, EX_ttrcyc_e). Metabolite and gene counts are
+    identical in both. See design doc F27.

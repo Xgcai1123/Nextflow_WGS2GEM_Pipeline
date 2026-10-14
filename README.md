@@ -155,7 +155,13 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 - **reports the defined-medium growth result** as a table directly after the MEMOTE score
   table (step 11): growth on M9 next to growth on the complete medium CarveMe ships, the
   negative controls, and a count of failed checks. Its section configuration lives in the
-  TSV's own file header, so no `sp:` entry was added to the reused config (F26).
+  TSV's own file header, so no `sp:` entry was added to the reused config (F26), and
+- **explains its two reaction counts instead of letting them contradict each other.** The
+  CarveMe table reads its counts from the SBML file, while MEMOTE reports them after cobra
+  auto-creates an exchange reaction for 10 boundary metabolites the file leaves without one
+  (`EX_na1_e`, `EX_ni2_e`, …) — hence 2486 against MEMOTE's 2496 on the same model. A
+  `section_comments` note sits next to the number; metabolite and gene counts agree exactly
+  (design doc F27).
 
 The cohort shown in the report is exactly the sample sheet — built-in modules are fed an
 explicit file list, never a directory scan, so subset reports stay consistent.

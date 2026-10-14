@@ -1018,6 +1018,14 @@ profiles {
   - **顺带抓到一个真实漏洞（检查套件立功）**：新 `publishDir` 未在 `tests/ci/ci.config` 中重定向，第一次 `-stub-run` 就把**空占位文件发布进了真实 `models/growth/`**——被 **F18 守卫当场抓出**（`run-stub-smoke.sh` 的 `find -newer` 断言报 "no repository output file modified" 失败）。已补 ci.config 重定向并删除两个 0 字节污染文件。这正是那道防线的价值。
   - **验收（2026-10-15）**：DAG 24 任务（`run-stub-smoke` 全绿，产物契约含 `models/growth/{growth_mqc.tsv,growth.tsv}`）；`nextflow lint` **0 error / 34 warning**（低于 38 棘轮——新增代码零告警，并顺手把 4 处 `Channel.` 换成新 API `channel.`）；报告按 process 命令重放后新增 *Growth on defined medium* 章节，顺序为 `fastqc → quast → quast_full → busco → carveme_summary → memote_summary → growth_on_medium → memote_full_* → pipeline_runtime → versions`，表内含 5 列与两样本（0.953 / 66.000 / 0.000 / 0.228 / 0 失败）；4 个内嵌 iframe 往返仍**逐字节一致**、`<base href="/">` 计数仍为 0；报告 16.12 → **16.14 MB**。
 
+- **F27 报告里两个"反应数"对不上（用户发现，2026-10-15）**：用户报告 MultiQC 里 MEMOTE 板块的 **Total Reactions / Total Metabolites** 与原始 MEMOTE 数据对不上。实测**两份产物都对，只是量的是两件事**：
+  - MultiQC 的 **CarveMe 表**（`multiqc_extras.py` 产出）直接数 **SBML 文件元素**：reactions **2486 / 2478**，species **1551 / 1538**，genes **1623 / 1609**；
+  - **MEMOTE** 用 **cobra 加载后**计数（`test_reactions_presence` / `test_metabolites_presence` / `test_genes_presence` 的 `data` 长度）：reactions **2496 / 2488**，metabolites **1551 / 1538**，genes **1623 / 1609**。
+  - 结论：**代谢物与基因完全一致，只有反应数差 10**（两样本各差 10）。
+  - 差的 10 个**全部是 cobra 加载时自动创建**的 exchange 反应——文件里这些胞外边界代谢物没有对应 exchange：`EX_na1_e, EX_ni2_e, EX_cd2_e, EX_cm_e, EX_hg2_e, EX_fusa_e, EX_gbbtn_e, EX_novbcn_e, EX_doxrbcn_e, EX_ttrcyc_e`。**踩坑记录**：SBML 里 reaction 的 `id` 形如 `R_<biggid>`（`R_12DGR140tipp`），而 cobra 暴露的是 `<biggid>`；直接对两个 id 集合做差会得到"2495 个全不匹配"的假象（我也先被这个坑了一次），必须按 `R_` 前缀对齐后再比。
+  - **对策**：**不改复用资产**（D4：`multiqc_extras.py` 与 `multiqc_config.yaml` 保持字节一致），改用覆盖层的 **`section_comments`**（按**章节 anchor** 键控，`multiqc/modules/base_module.py:60` 读取）在 `carveme_summary` 章节内就地解释。实测注释渲染在 CarveMe 章节描述之后、表格之前。
+  - **顺带发现的互操作性隐患**：M9 配方里的 `na1` 与 `ni2` **恰好落在这 10 个"文件里没有、cobra 补上"的 exchange 里**。也就是说 `check_growth.py` 能把它们映射成功，**依赖 cobra 的自动补齐**；换一个不自动补 exchange 的下游工具加载同一个 SBML，介质应用会报"缺组分"。已在 F25/D16 的语境下记明：**模型的 exchange 集合是"文件 ∪ cobra 补齐"，不是文件本身自足的。**
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
