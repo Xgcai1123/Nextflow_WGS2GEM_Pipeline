@@ -167,13 +167,6 @@ docs/                       design document, asset provenance, audit notes
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
 ```
 
-## Citation
-
-If you use this pipeline, please cite:
-
-> Melkonian C et al. "Microbial interactions shape cheese flavour formation."
-> *Nature Communications* **14**, 8348 (2023). https://doi.org/10.1038/s41467-023-41059-2
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
