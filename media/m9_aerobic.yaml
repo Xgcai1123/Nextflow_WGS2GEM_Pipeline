@@ -1,0 +1,113 @@
+# =============================================================================
+# Physiological growth medium for the WGS -> GEM pipeline (M9, aerobic, glucose)
+# =============================================================================
+# WHY THIS FILE EXISTS
+#   The CarveMe models this pipeline produces are shipped with *every* exchange
+#   reaction open -- 342 of 342 in the v0.1.0 models. That is a complete medium
+#   with unlimited uptake of all substrates, so FBA lets the cell IMPORT every
+#   amino acid, nucleotide, vitamin and trace metal instead of building them, and
+#   the objective value stops being a growth rate: it becomes an assembly-rate
+#   artefact. Measured on the v0.1.0 models: 66.0 h^-1 on the shipped default
+#   medium (see docs/nextflow-port-design.md F25).
+#
+#   A metabolic model has no single "growth rate" -- the medium is a boundary
+#   condition, and the model is only testable once it is declared. This file
+#   declares it, so the claim "the model grows" has a meaning.
+#
+# WHERE THE RECIPE COMES FROM
+#   `components` below is taken verbatim from CarveMe's own medium database,
+#   which ships inside the carveme conda environment used by this pipeline:
+#
+#       carveme/data/input/media_db.tsv   ->   row `M9`  (20 compounds)
+#
+#   so the composition is not invented here. The same database also defines
+#   `M9[-O2]` (anaerobic, 19 compounds) and `M9[glyc]` (glycerol), which is why
+#   the negative controls below are cheap to express.
+#
+# THE UPTAKE RATES ARE A PROJECT CONVENTION, NOT MEASUREMENTS
+#   CarveMe's own helper (carveme.reconstruction.utils.medium_to_constraints)
+#   applies a UNIFORM max_uptake = 10 mmol/gDW/h to every medium component. We
+#   deliberately deviate, so that carbon is the single limiting nutrient and the
+#   result is a carbon-limited growth rate:
+#
+#       carbon source (glucose)  10    <- limiting
+#       O2                       20    <- in excess, but finite
+#       everything else        1000    <- effectively unlimited (salts, metals)
+#
+#   These are community-conventional FBA bounds of the right order of magnitude;
+#   they are NOT measured for these strains. Tightening them requires either a
+#   chemostat/BIOLOG measurement or a published medium formulation.
+#   Every component NOT listed here is CLOSED (uptake 0) by the checker.
+#
+# UNITS: mmol / gDW / h   (uptake capacity; the model's lower bound becomes -value)
+# =============================================================================
+
+name: M9 aerobic (glucose)
+description: >-
+  Aerobic M9 minimal medium with D-glucose as the sole carbon source. Compound
+  list from CarveMe's media_db.tsv (`M9`); uptake rates per project convention.
+
+provenance:
+  source_package: carveme
+  source_file: carveme/data/input/media_db.tsv
+  source_medium_row: M9
+  compound_count: 20
+
+units: mmol/gDW/h
+
+carbon_source: glc__D
+
+components:
+  # --- carbon and energy -----------------------------------------------------
+  glc__D: 10        # D-Glucose    - the limiting nutrient
+  o2: 20            # O2           - finite but in excess
+  # --- macro elements --------------------------------------------------------
+  nh4: 1000         # Ammonium     - nitrogen source
+  pi: 1000          # Phosphate
+  so4: 1000         # Sulfate      - sulfur source
+  # --- water and protons -----------------------------------------------------
+  h2o: 1000
+  h: 1000
+  # --- cations and trace metals ---------------------------------------------
+  # Missing one of these can produce a FALSE zero growth rate: several biomass
+  # precursors are metal-containing cofactors (Fe-S clusters, molybdopterin,
+  # cobalamin). The checker fails loudly if a listed compound has no exchange
+  # reaction in the model, so a typo cannot silently starve the model.
+  k: 1000
+  na1: 1000
+  mg2: 1000
+  ca2: 1000
+  cl: 1000
+  fe2: 1000
+  fe3: 1000
+  mn2: 1000
+  zn2: 1000
+  cu2: 1000
+  cobalt2: 1000
+  mobd: 1000         # Molybdate
+  ni2: 1000
+
+# Negative controls: closing these must change the answer in the stated way.
+controls:
+  # No carbon source at all -> the model must NOT be able to grow.
+  no_carbon_source:
+    close: [glc__D]
+    expect: zero
+  # Anaerobic -> growth must DROP (E. coli can still ferment glucose, so the
+  # expectation is "lower", not "zero"; asserting zero here would be wrong).
+  anaerobic:
+    close: [o2]
+    expect: lower
+
+# Thresholds for the assertions in scripts/check_growth.py.
+checks:
+  # Plausibility window on M9. Deliberately generous: the lower bound catches a
+  # starved or broken medium, the upper bound catches a network that is STILL
+  # leaking even after the other ~320 exchanges were closed.
+  min_growth: 0.4
+  max_growth: 1.5
+  # Physical bound, organism-independent: no model may outgrow the fastest known
+  # bacterium (Vibrio natriegens, 14.8 min doubling time -> ln(2)/(14.8/60)).
+  # This is the bound MEMOTE's `test_fast_growth_default` intends but asserts
+  # with inverted polarity in 0.17.0, which is why we assert it ourselves.
+  max_absolute_growth: 2.81

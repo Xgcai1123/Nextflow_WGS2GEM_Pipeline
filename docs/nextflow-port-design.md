@@ -59,8 +59,11 @@ WGSpipeline-nextflow/
 │   ├── memote_report.py
 │   ├── memote_html_section.py  # 新增：把 MEMOTE HTML 包成 MultiQC 内嵌段（F21）
 │   ├── quast_html_section.py   # 新增：把 QUAST 自身产物包成 MultiQC 内嵌段（F24）
+│   ├── check_growth.py         # 新增：限定介质下的生长验证断言（F25 / D16）
 │   ├── bin/bakta               # AMR-guard 包装器入口
 │   └── amr_guard/amr_chunk_guard.py
+├── media/
+│   └── m9_aerobic.yaml         # 新增：版本化的生理介质（组分取 CarveMe 自带 M9，F25）
 ├── bin/
 │   └── task_env.sh             # 新增：任务内计时 helper（§10）
 ├── docs/
@@ -995,6 +998,17 @@ profiles {
   - **该内嵌能力现有 CI 守卫（2026-10-14）**：`tests/ci/run-embed-check.sh` 用 fixtures **直跑**两个内嵌脚本（既不建 conda 也不经 Nextflow，0.3 秒 / 47 条断言），断言章节头（`id`/`section_name`/`plot_type`——MultiQC 对畸形头是**静默忽略**，写成错的只会少一个章节、不会报错）、每样本 `srcdoc` 与源文件**逐字节往返**（fixtures 刻意塞满 `&` `<` `>` `"` `'`）、内嵌页的 `<base href="/">`/`<style>`/`<script>` 绝不外泄到外层文档、QUAST 单文件 vs MEMOTE 逐样本（D15）、缺失样本只告警不崩、以及覆盖层里 `quast_full` 落在 `quast` 与 `busco` 之间。它之所以必要：其余检查全走 `-stub-run`，而 stub 模式下 MULTIQC 的 `stub:` 块**替换**真实脚本体，这两个内嵌脚本在任何其他检查里都**从未被执行**过。该检查本身也做了变异验证（去转义 / 改锚点 / 删注释头 / 插锚点分别触发 4 / 13 / 2 / 1 条断言失败并非零退出），不是"看着像能过"。
   - 报告由**与 MULTIQC process 完全一致的命令**在仓库外重放生成后发布（同 §12.1 F19/F20 的既有做法）。原因：上一轮 `-resume` 会话缓存只含部分任务（磁盘 99%、仅 8.3 GiB 可用，低于 F22 的 20 GiB 闸门，需显式 `--min_free_disk_gb`；且被杀死的探查运行把任务写进了另一个会话的缓存，`.nextflow/history` 里最后一条指向的会话没有完整 23 任务），不存在只重跑 MULTIQC 的 `-resume` 路径。改跑 `tests/ci/run-lint.sh`（0 error / 38 warning = 告警棘轮未涨）与 `tests/ci/run-stub-smoke.sh`（23 任务 DAG + 产物契约 + 根产物零改写）验证 `main.nf` 改动。
 
+- **F25 交付的 CarveMe 模型在出厂默认介质下"生长"66 h⁻¹——这是装配速度假象，且管线自己的 MEMOTE 结果里一直记着它（2026-10-15）**：CarveMe 产出的 SBML **342/342 个 exchange 全部开放**（=完全培养基、所有底物无限吸收）。在此边界下 FBA 给出 **66.000 h⁻¹**（两样本 66.000 / 66.001），而 *E. coli* 实测最大比生长速率约 1 h⁻¹。机制：氨基酸/核苷酸/维生素/金属全都能直接**吸收**，细胞不需要合成，生物质方程退化成装配问题，约束只剩"生物质中摩尔需求最大的前体"。两个对照排除"模型漏了"：完全不给营养 → **0.000**（生物质不能被凭空满足）；只给葡萄糖+O₂ → **0.000**（正确地缺 N/P/S/矿质）。**故模型本身自洽，缺的是介质定义这一步**——FBA 里介质是**边界条件**而非模型属性，"这个模型能长多快"在未声明介质时无意义。
+  - **这个问题一直在管线自己的产物里**：`models/memote/<s>/memote_result.json` 的 `test_biomass_default_production` / `test_biomass_open_production` 记录的 `data` 就是 **65.99993**，`test_fast_growth_default` 记录 `{'Growth': True}`（"比已知最快细菌还快"）。没人发现有三个叠加原因：
+    1. **该测试断言极性反了**（MEMOTE 0.17.0 `suite/tests/test_biomass.py:411/433`）：文档字符串写 "*Expect the predicted growth rate ... to be below 2.81*"，代码却是 `outcome = get_biomass_flux(...) > 2.81` 然后 `assert outcome`。复跑实测：MEMOTE 自己的 helper 对同一模型返回 **65.9999**、`> 2.81` 为 True，而 pytest 报 **PASSED**。它自己的提示文字也印证极性装反（True 分支描述"是问题"，False 分支描述"属正常"）；同一函数里的 `metric = 1.0 - outcome` 随之失效（由 `test_biomass_default_production` 可反推 metric 语义是"偏差、0 最好"）。
+    2. **它根本不进分数**：`memote_result.json` 的 `weights`（真正参与打分的 12 条测试）全部属于 consistency / annotation，`score.sections` 只有 `consistency` + `annotation_met/rxn/gene/sbo`——**biomass / basic 这组测试权重为 0**。所以"MEMOTE 68.1"不能作为"模型被生理学检验过"的证据。
+    3. `test_find_medium_metabolites` 是**崩的**：`TypeError: unsupported operand type(s) for /: 'int' and 'list'`（同为上游 bug，非模型缺陷）。
+  - 另两条**真实**的模型问题（非 bug，来自同一次定向跑）：`test_biomass_consistency[Growth]` 失败——生物质反应各组分摩尔质量合计 **1.0327**，超出 1 mmol·gCDW⁻¹·h⁻¹ 的 1e-3 容差（CarveMe 模板未归一化）；`test_essential_precursors_not_in_biomass[Growth]` 失败——生物质缺必需前体 **`fmn_c`**。
+  - **对策（D16）**：介质版本化为 `media/m9_aerobic.yaml`（**组分直接取 CarveMe 自带 `carveme/data/input/media_db.tsv` 的 `M9` 行，20 个化合物，不自行发明**；摄取上限葡萄糖 10 / O₂ 20 / 其余 1000 mmol·gDW⁻¹·h⁻¹，明确标注为**项目约定而非实测**），断言由 `scripts/check_growth.py` 自己做——**不依赖上游那条极性反了的测试**。
+  - **实测（两个 v0.1.0 模型）**：M9 好氧 → **0.953 h⁻¹**（两样本 0.9528 / 0.9526）；葡萄糖摄取**恰好饱和在 10.000/10**（=碳是唯一限制性营养）、O₂ 17.6/20（不限制）；无碳源 → 0.000；厌氧 → 0.228（低于好氧）；出厂全开介质 → 66.000。**隐含得率 95 gDW/mol 葡萄糖 ≈ 0.53 g/g，对照实测约 0.5 g/g**——这是 66 h⁻¹ 永远过不了的独立合理性检验。
+  - **边界（诚实声明）**：该检查证明的是**生理合理性，不是定量准确性**（后者需要实测生长数据）；且两个模型给出**相同**生长速率，因为 CarveMe 的模板生物质方程占主导——**该检查无法区分菌株**。
+  - **CI 守卫**：`tests/ci/run-growth-check.sh` + 独立 job（唯一需要 `cobra` 的 job，`pip install cobra` 自带 GLPK/swiglpk）。真实模型是生成物、不在仓库里，故 CI 用**测试内生成的合成模型**（行为由构造保证）验证 checker 本身，并带三条负对照（介质组分无法映射 / 阈值不可能满足 / 越过物理上限）——每条都必须让脚本非零退出。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1095,6 +1109,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D13 | F20 磁盘余量由 README 提醒改为 `workflow.main` 开头硬预检（`min_free_disk_gb`，默认 20 GiB，`0` 关闭）；逐个输出目录解析"最近存在祖先"的**文件系统**并去重，任务启动前中止 | 已定（2026-10-14 实测三分支） |
 | D14 | 回归守卫用 `tests/ci/*.sh` 承载、GitHub Actions 只做"装 Nextflow + 调脚本"：本地与 CI 同一批断言；全部用 `-stub-run` + 禁用 conda，真实数据验收仍人工 | 已定（2026-10-14） |
 | D15 | 内嵌第三方工具自身报告（MEMOTE / QUAST）时，**每个工具一个固定锚点的章节**，不按样本拆章：`report_section_order` 锚点精确匹配、无法预知样本名，逐样本 id 会让章节落到管线顺序之外；代价是章节内按样本分块而非每样本一个折叠标题 | 已定（2026-10-14，F24） |
+| D16 | 生长验证**自建**而非委托上游：介质版本化为 `media/m9_aerobic.yaml`（组分取 CarveMe 自带 M9 行，不自行发明），断言由 `scripts/check_growth.py` 承担（组分可映射 / 落窗 [0.4,1.5] / 物理上限 2.81 / 无碳源为 0 / 厌氧更低）。理由：MEMOTE 0.17.0 的 `test_fast_growth_default` 断言极性反了、且该组测试进不了分数（F25），把物理上限委托给它等于没有守卫。**不**把该断言塞进 `main.nf` 做硬失败：窗口是 *E. coli* 特定的，而 BUSCO 谱系可换、样本可为非肠杆菌；管线的普适断言只有"不长于已知最快细菌"与"无碳源不长" | 已定（2026-10-15，F25） |
 
 ## 17. 里程碑与后续开放问题
 
@@ -1103,7 +1118,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | 0 | 安装 Nextflow；验证 §12 待验证清单 1–4 | ✅ **完成（2026-10-14）**：Nextflow 26.10.0（conda env `nextflow`，mamba 安装）；四项结论 + F1–F8 见 §12 清单表；复现探针 `m0probe/` |
 | 1 | 骨架：config + 解析期校验 + FASTQC×2 + TRIMMOMATIC | ✅ **完成（2026-10-14）**：资产副本入库（`docs/asset-sources.md`，来源 commit `75f1d21`）；`-stub` 干跑 10 任务 DAG 正确；渲染命令逐 token 对齐；坏样本表 4 例注入全部启动期失败；真实运行产物与源仓库一致且 Trimmomatic 逐字节一致；F9–F14 见 §12 清单表 |
 | 2 | 组装与 QC：SPADES / QUAST / BUSCO | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；QUAST `--labels` 坑位验证（报告内 assembly=样本名）；真实运行 **SPAdes contigs.fasta 与 QUAST report.tsv 均与源仓库逐字节一致**；BUSCO 评分与源仓库一致（差异仅输入路径与 python 补丁号等元数据）；publish 布局修正（F15 saveAs）；F14–F18 见 §12 清单表 |
-| 3 | 注释与建模：BAKTA(+guard) / CARVEME / MEMOTE | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；真实运行通过——**AMR-guard 在 O157:H7（SRR10194530）触发并成功兜底**（日志见 `[amr-guard] WARNING ... retrying chunk-wise`，bakta.tsv 完整产出）；**CarveMe 不覆盖 Bakta TSV**（坑位 #5：bakta tsv 首行 `# Annotated with Bakta` 完好，diamond 表落在 carveme 目录）；MEMOTE 评分 SRR1770413=68.0 / SRR10194530=67.7 |
+| 3 | 注释与建模：BAKTA(+guard) / CARVEME / MEMOTE | ✅ **完成（2026-10-14）**：渲染命令逐 token 对齐；真实运行通过——**AMR-guard 在 O157:H7（SRR10194530）触发并成功兜底**（日志见 `[amr-guard] WARNING ... retrying chunk-wise`，bakta.tsv 完整产出）；**CarveMe 不覆盖 Bakta TSV**（坑位 #5：bakta tsv 首行 `# Annotated with Bakta` 完好，diamond 表落在 carveme 目录）；MEMOTE 评分 SRR1770413=68.0 / SRR10194530=67.7（**数值更正 2026-10-15**：原始分为 0.680641 / 0.677781，管线自己的表格四舍五入为 **68.1 / 67.8**，此处 68.0 / 67.7 系截断；且该总分只覆盖 consistency + annotation 两类，biomass/basic 组**权重为 0**——详见 F25） |
 | 4 | 报告：MULTIQC + task_env 计时 | ✅ **完成（2026-10-14）**：custom content 6 个 TSV（carveme_modelstats/summary、memote_score/summary、pipeline_runtime、quast_generalstats）齐全；`benchmarks/` 含 multiqc.tsv + 22 个 per-sample 计时 TSV；报告内恰 2 个样本（cohort=样本表，不扫目录）。**排版（F21，用户要求）**：章节与 General Stats 列均按管线顺序（FastQC→QUAST→BUSCO→CarveMe→MEMOTE→耗时→版本），并把 MEMOTE 完整 `index.html` 以独立 iframe 内嵌进报告（报告 4.9 MB → 15.2 MB）。注：因 F19/F20，报告最终以与 process 完全一致的命令手动生成（见 §12.1 F20/F21） |
 | 5 | 全量对拍（阶段 B/C）+ 回写文档 + readme 补充 Nextflow 运行说明 | 对拍表全部通过 |
 | 6 | 防御性加固：磁盘硬预检（F22/D13）+ 每次 push 的 CI 回归守卫（阶段 D/D14）+ 单样本失败注入实测（F23/D12） | ✅ **完成（2026-10-14）**：预检三分支实测（满足/不满足/关闭）且不满足时在任何任务前中止；CI 3 个 job 全绿（lint 0 error + 告警棘轮、`-preview` + 6 坏样本表、F22 三分支、23 任务 stub 干跑 + 产物契约 + 根产物零改写、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照）；单样本失败从"未验证限制"变为"实测语义"，并更正了 `finish` ≠ `--keep-going` 的旧表述 |
@@ -1121,7 +1136,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 **生物学准确性 —— 通过（有据）。**
 - BUSCO 100% 完整（440/440，0 缺失）——高质量组装；
 - QUAST：K-12 4.84 Mb / 50.33% GC / N50 159 kb；O157:H7 5.40 Mb / 50.34% GC / N50 244 kb——与已知大肠杆菌基因组大小一致（O157:H7 因前噬菌体/O-岛更大）；
-- 组装大小与样本表物种（K-12 vs O157:H7）吻合；BUSCO 谱系 enterobacterales_odb10 正确；MEMOTE 评分 68.0 / 67.7（草稿 GEM 典型值）；
+- 组装大小与样本表物种（K-12 vs O157:H7）吻合；BUSCO 谱系 enterobacterales_odb10 正确；MEMOTE 评分 68.0 / 67.7（草稿 GEM 典型值；**更正 2026-10-15 → 68.1 / 67.8，且该分数不含生长/生物质测试，见 F25**）；
 - Trimmomatic/SPAdes/QUAST 与源仓库逐字节一致 → 无静默漂移；AMR-guard 正确处理 O157:H7 的 AMRFinderPlus 崩溃边缘用例。
 
 **易用性 —— 通过（缺口已补）。** 单入口 `nextflow run .`，conda 环境自动构建，`-profile standard/lowmem`，CLI 覆盖 params，samples.tsv 沿用源格式。**原缺口已闭环（2026-10-14）**：已补 Nextflow 版 `README.md`（运行说明、参数表、产物布局、失败行为），磁盘余量 ≥20 GB 从"提醒"升级为**启动前硬预检**（F22/D13），并新增 `tests/ci/` 零成本检查套件与 GitHub Actions（阶段 D/D14）。

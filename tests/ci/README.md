@@ -13,6 +13,9 @@ bash tests/ci/run-preview.sh
 bash tests/ci/run-disk-guard.sh
 bash tests/ci/run-stub-smoke.sh
 bash tests/ci/run-failure-isolation.sh
+
+# Needs a python with `cobra` (no Nextflow, no conda):
+PYTHON=.nextflow/conda/<memote env>/bin/python3 bash tests/ci/run-growth-check.sh
 ```
 
 Each script exits non-zero on the first failed assertion and prints a `PASS/FAIL` line per
@@ -28,6 +31,7 @@ assertion. They are independent and can be run in any order.
 | `run-disk-guard.sh` | The F20 disk pre-flight passes at a low floor, **aborts before any task** with a message naming the shortfall and the cleanup commands when the floor is unmet, and is fully skipped with `--min_free_disk_gb=0`. |
 | `run-stub-smoke.sh` | The complete 10-step DAG (23 tasks) runs to success with stubs, producing the full documented artifact tree — and the validated output tree at the repository root is **not modified** (the F18 regression guard: a stub run once published empty placeholders over real deliverables). |
 | `run-failure-isolation.sh` | With one sample's first task deliberately killed: the run **exits 1** (never swallowed), the failed sample produces **no downstream deliverables**, the healthy sample's finished work **survives**, and `-resume` converges while reusing that work. It also re-measures the negative control: `errorStrategy = 'ignore'` — the only strategy that would continue independent branches — exits **0** with a dead task, which is why it is rejected (design doc D12). |
+| `run-growth-check.sh` | `media/m9_aerobic.yaml` + `scripts/check_growth.py` still work: the checker passes a synthetic model whose behaviour is known by construction (growth 1.0 h⁻¹, strictly lower anaerobically, zero without a carbon source), and **three negative controls each make it exit non-zero** — an unmappable medium component, an impossible plausibility window, and a physical-bound violation. It also asserts the committed medium itself (20 compounds, provenance row `M9`, every control compound present in the medium, physical bound above the window). The real models are generated artefacts and are not in the repository, so this guards the *checker*; the models themselves are validated whenever the checker is run on a real run (design doc F25). |
 
 ## Layout
 
@@ -44,8 +48,18 @@ assertion. They are independent and can be run in any order.
 
 - **No conda environment is built** and no tool is executed: all Nextflow checks use `-stub-run`
   (every process has a `stub:` block). Measured on the development machine: `run-embed-check.sh`
-  0.3 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s, `run-disk-guard.sh` 16 s,
-  `run-failure-isolation.sh` 27 s, `run-preview.sh` 33 s.
+  0.3 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s, `run-growth-check.sh` 12 s,
+  `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s, `run-preview.sh` 33 s.
+- `run-growth-check.sh` is the **one check that is not tool-free**: it needs `cobra` to solve
+  flux balance problems, so its CI job runs `pip install cobra` (which brings the GLPK solver
+  `swiglpk` as a hard dependency). Locally, point `PYTHON` at the pipeline's memote environment,
+  which already has it. It generates its own synthetic model instead of committing one: the toy
+  is plumbing, not data, and a fake biological model under `fixtures/` invites being mistaken
+  for one.
+- The negative controls here matter more than the positive case. A checker that only ever
+  reports "ok" is indistinguishable from a checker that does nothing, so each guard is proven
+  to *fire*: a medium component with no exchange reaction, a window no model could satisfy, and
+  a physical-bound violation must each make the script exit non-zero.
 - `run-embed-check.sh` needs no Nextflow at all: it calls `scripts/memote_html_section.py` and
   `scripts/quast_html_section.py` directly with `python3` (standard library only), which is why
   it is the first step of the smoke job. It exists because the stub path means those two scripts
@@ -63,6 +77,6 @@ assertion. They are independent and can be run in any order.
   asserts that it fired, so this degrades into a loud failure, never a false pass.
 - `run-lint.sh` pins a warning baseline that is specific to the Nextflow version in
   `NEXTFLOW_VERSION`. Re-record it in the same commit as a deliberate version bump.
-- These are fast, tool-free guards. The real acceptance test — ten steps, real
-  tools, real reads — stays the manual procedure in
+- Apart from `run-growth-check.sh` (cobra), these are fast, tool-free guards. The real
+  acceptance test — ten steps, real tools, real reads — stays the manual procedure in
   [`docs/nextflow-port-design.md`](../../docs/nextflow-port-design.md) §14.

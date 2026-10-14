@@ -8,9 +8,12 @@
 # No conda environment is built and no real tool is executed: the smoke checks
 # use `-stub-run` with conda disabled (tests/ci/ci.config), because all ten
 # processes carry a `stub:` block, and the embedding check runs the two
-# report-embedder scripts directly (no Nextflow at all). The whole job set
-# finishes in about a minute per job. The full 10-step run against real data
-# stays a manual, documented acceptance test (docs/nextflow-port-design.md §14).
+# report-embedder scripts directly. The growth job is the one exception to
+# "tool-free": it needs `cobra` (pip-installed) to run flux balance analysis on a
+# synthetic model, because the real models are generated artefacts and are not in
+# the repository. The whole job set finishes in about a minute per job. The full
+# 10-step run against real data stays a manual, documented acceptance test
+# (docs/nextflow-port-design.md §14).
 # ============================================================
 
 name: CI
@@ -78,3 +81,18 @@ jobs:
           java-version: '21'
       - name: Inject a failing sample; verify loud failure + -resume convergence
         run: bash tests/ci/run-failure-isolation.sh
+
+  growth-validation:
+    name: defined-medium growth check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # No Nextflow and no conda: the checker needs only cobra, which brings its
+      # own GLPK solver (swiglpk) as a hard dependency.
+      - name: Install cobra
+        run: pip install cobra
+      - name: Defined-medium growth check + its negative controls (F25)
+        run: bash tests/ci/run-growth-check.sh

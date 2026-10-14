@@ -79,9 +79,10 @@ row-specific message.
 
 ### Verify without running the pipeline
 
-The repository ships a tool-free check suite — no conda environment is built and no tool is
-executed (the ten processes run from their `stub:` blocks, and the embedding check calls the
-two helper scripts directly):
+The repository ships a check suite — no conda environment is built and no tool is executed (the
+ten processes run from their `stub:` blocks, and the embedding check calls the two helper
+scripts directly). Only the last line needs a python with `cobra`; the rest need nothing but
+Nextflow:
 
 ```bash
 bash tests/ci/run-embed-check.sh           # MEMOTE / QUAST section scripts (no Nextflow needed)
@@ -90,6 +91,7 @@ bash tests/ci/run-preview.sh               # compile + sample-sheet validation, 
 bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
 bash tests/ci/run-stub-smoke.sh            # full 10-step DAG + published output contract
 bash tests/ci/run-failure-isolation.sh     # injected single-sample failure + -resume
+PYTHON=.../bin/python3 bash tests/ci/run-growth-check.sh   # defined-medium growth (needs cobra)
 ```
 
 The same scripts run on every push
@@ -150,6 +152,48 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 The cohort shown in the report is exactly the sample sheet — built-in modules are fed an
 explicit file list, never a directory scan, so subset reports stay consistent.
 
+## Model validation (defined medium)
+
+A flux balance model has no single growth rate: **the medium is a boundary condition**, so a
+model is only testable once its medium is declared. CarveMe ships these models with *every*
+exchange reaction open — a complete medium — under which the drafts "grow" at **66 h⁻¹**. That
+is an assembly-rate artefact, not a growth prediction: with everything available the cell
+imports amino acids, nucleotides, vitamins and trace metals instead of building them. The
+pipeline's own MEMOTE results have always contained that number
+(`test_biomass_default_production`, `data = 65.99993`) without the score reflecting it — the
+biomass/basic tests carry **weight 0** in the scorecard, whose 12 weighted tests are all
+consistency and annotation.
+
+So the medium is declared in the repository and asserted:
+
+- [`media/m9_aerobic.yaml`](media/m9_aerobic.yaml) — aerobic M9, glucose as sole carbon source.
+  The 20 compounds are CarveMe's own M9 (`carveme/data/input/media_db.tsv`), so the recipe is
+  not invented here; the uptake rates (glucose 10, O₂ 20, minerals 1000 mmol·gDW⁻¹·h⁻¹) are a
+  **documented project convention, not measurements**.
+- [`scripts/check_growth.py`](scripts/check_growth.py) — asserts that every medium component
+  maps to an exchange reaction, that growth lands in a plausible window, that it respects the
+  organism-independent physical bound (2.81 h⁻¹, the fastest known bacterium), that removing
+  the carbon source gives zero growth, and that anaerobic growth is lower. Run it directly, or
+  via `bash tests/ci/run-growth-check.sh`.
+
+Measured on both models of the v0.1.0 cohort:
+
+| | K-12 (`SRR1770413`) | O157:H7 (`SRR10194530`) |
+|---|---|---|
+| M9 aerobic, glucose | **0.953 h⁻¹** | **0.953 h⁻¹** |
+| no carbon source | 0.000 | 0.000 |
+| anaerobic | 0.228 | 0.228 |
+| complete medium (shipped default) | 66.000 | 66.001 |
+
+Glucose uptake is saturated (10.000 of 10 mmol·gDW⁻¹·h⁻¹), so carbon is the single limiting
+nutrient, and O₂ is not limiting (17.6 of 20). The implied biomass yield is **95 gDW/mol
+glucose ≈ 0.53 g/g**, against roughly 0.5 g/g measured for *E. coli* on glucose minimal medium —
+an independent plausibility check that 66 h⁻¹ could never have passed.
+
+Two honest limits: this establishes **physiological plausibility, not quantitative accuracy**
+(the latter needs measured growth data), and both models predict the *same* rate because
+CarveMe's template biomass equation dominates — the check cannot discriminate between strains.
+
 ## Performance
 
 The per-step wall times in `benchmarks/` are real measurements of the tool commands. They are
@@ -197,8 +241,12 @@ Outputs of the deterministic stages reproduce the original Snakemake results **b
 | BUSCO summaries | identical scores (only paths / patch versions differ) |
 
 Biological sanity of the reference run (two *E. coli* isolates): BUSCO 100 % complete
-(440/440), assembly sizes and GC% consistent with K-12 and O157:H7, MEMOTE total scores 68.0
-and 67.7.
+(440/440), assembly sizes and GC% consistent with K-12 and O157:H7, and MEMOTE total scores
+**68.1 and 67.8** (raw 0.680641 / 0.677781; earlier revisions of this file quoted the truncated
+68.0 / 67.7). Note what that score does and does not cover: its 12 weighted tests are all
+consistency and annotation, so it is **not** evidence that the models were checked
+physiologically — see *Model validation (defined medium)* above for that, and for the
+biomass/growth tests that carry zero weight.
 
 ## Repository layout
 
@@ -208,12 +256,13 @@ nextflow.config             parameters, process settings, conda, profiles
 multiqc_config.yaml         MultiQC config (byte-identical reused asset)
 multiqc_nextflow.yaml       MultiQC presentation overlay (step order, MEMOTE + QUAST embedding)
 envs/                       conda environment definitions (8, byte-identical)
+media/                      versioned growth-medium definition (M9, aerobic, glucose)
 scripts/                    helper scripts (byte-identical) + memote_html_section.py,
-                            quast_html_section.py
+                            quast_html_section.py, check_growth.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
 docs/                       design document, asset provenance, audit notes
 tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard,
-                            failure isolation, report-embedding scripts)
+                            failure isolation, report-embedding scripts, growth check)
 .github/workflows/ci.yml    runs tests/ci/ on every push and pull request
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
 ```

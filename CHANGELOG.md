@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Growth validation on a defined physiological medium.** A flux balance model has no single
+  growth rate — the medium is a boundary condition. CarveMe ships these models with all 342
+  exchange reactions open (a complete medium), under which they "grow" at **66 h⁻¹**: with
+  everything importable the cell never builds amino acids, nucleotides, vitamins or metals, so
+  the objective measures assembly speed rather than growth. The medium is now declared and
+  asserted:
+  - `media/m9_aerobic.yaml` — aerobic M9, glucose as sole carbon source. The 20 compounds are
+    CarveMe's own M9 (`carveme/data/input/media_db.tsv`), so the recipe is not invented here;
+    the uptake rates (glucose 10, O₂ 20, minerals 1000 mmol·gDW⁻¹·h⁻¹) are a documented
+    convention, not measurements;
+  - `scripts/check_growth.py` — asserts that every medium component maps to an exchange
+    reaction in the model (a typo would otherwise silently starve it and look like a result),
+    that growth lands in a plausible window, that it respects the organism-independent physical
+    bound of 2.81 h⁻¹ (the fastest known bacterium, *V. natriegens*), that removing the carbon
+    source gives zero growth, and that anaerobic growth is strictly lower;
+  - `tests/ci/run-growth-check.sh` (+ a CI job) — guards the checker and the medium with three
+    negative controls (unmappable component, impossible window, physical-bound violation), each
+    of which must make it exit non-zero. It runs against a synthetic model generated in the
+    test, because the real models are generated artefacts that are not in the repository.
+
+  Measured on both v0.1.0 models: **0.953 h⁻¹** on M9 (glucose uptake saturated at 10.000 of
+  10 mmol·gDW⁻¹·h⁻¹, so carbon is the single limiting nutrient; O₂ not limiting at 17.6 of 20),
+  0.000 with no carbon source, 0.228 anaerobic, and 66.000 on the shipped complete medium. The
+  implied biomass yield is 95 gDW/mol glucose (≈ 0.53 g/g) against ~0.5 g/g measured for
+  *E. coli* on glucose minimal medium. This establishes physiological plausibility, **not**
+  quantitative accuracy; both models predict the same rate because CarveMe's template biomass
+  equation dominates (design doc F25, D16).
 - **CI coverage for the report-embedding scripts** (`tests/ci/run-embed-check.sh`). The rest of
   the suite drives the pipeline with `-stub-run`, and in stub mode MULTIQC's `stub:` block
   replaces the real script body — so `memote_html_section.py` and `quast_html_section.py` were
@@ -60,6 +87,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MEMOTE figures corrected, and what that score does *not* cover.** `README.md` and the design
+  document quoted total scores **68.0 / 67.7**; those are *truncations*, while the pipeline's own
+  tables (`memote_score.tsv`) round the raw `0.680641 / 0.677781` to **68.1 / 67.8**, which the
+  documentation now matches. The more important correction is the claim's scope: the scorecard's
+  12 weighted tests (from `memote_result.json` → `weights`) are all consistency and annotation,
+  so the **biomass/growth/medium tests carry weight 0** and "MEMOTE 68.1" is not evidence that a
+  model was checked physiologically. Those tests have in fact always recorded the complete-medium
+  artefact (`test_biomass_default_production` → `data = 65.99993`), and MEMOTE 0.17.0's
+  `test_fast_growth_default` asserts it with **inverted polarity** — `outcome = flux > 2.81`
+  followed by `assert outcome`, where the docstring says growth is expected to be *below* 2.81.
+  Re-running it confirms the inversion: pytest reports `PASSED` while MEMOTE's own helper returns
+  65.9999 for the same model. (`test_find_medium_metabolites` fails with an internal
+  `TypeError`, also upstream.) The physical bound is therefore asserted by this project instead
+  of being delegated to that test — see the growth validation entry above.
 - **Single-sample failure isolation is now measured, not assumed.** The port claimed
   `process.errorStrategy = 'finish'` was the equivalent of Snakemake's `--keep-going`; an
   injected failure (`tests/ci/run-failure-isolation.sh`) shows it is only partly equivalent.
