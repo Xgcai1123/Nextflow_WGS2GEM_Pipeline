@@ -466,6 +466,8 @@ process MULTIQC {
                                  // full MEMOTE / QUAST HTML embedding (F21/F24)
     path growth_section          // F26: growth-on-defined-medium table (*_mqc.tsv
                                  // is auto-discovered, so no `sp:` entry is needed)
+    val  nf_version              // F37: engine version, injected at run time
+    val  pipe_version            // this pipeline's own version (manifest)
 
     output:
     path("${report_name}.html")
@@ -539,6 +541,19 @@ process MULTIQC {
         qc_files="\$qc_files ${params.trim_qc_dir}/\${s}_R1_paired_fastqc.zip ${params.trim_qc_dir}/\${s}_R2_paired_fastqc.zip"
         qc_files="\$qc_files ${params.quast_dir}/\${s}/report.tsv"
     done
+
+    # F37: the engine version is a RUNTIME fact, so it is written here rather than
+    # hard-coded in multiqc_config.yaml (which used to claim `Snakemake 9.25.2`).
+    # MultiQC picks any `*_mqc_versions.yaml` up through its `software_versions`
+    # search pattern, so this row can never drift from the engine that ran.
+    # Written INTO custom_content/ because that directory is one of the paths the
+    # multiqc command below scans; a file in the task cwd would never be read.
+    cat > custom_content/nextflow_mqc_versions.yaml <<YAML
+    Nextflow:
+      nextflow: "${nf_version}"
+    NextFlow-WGS2GEM:
+      pipeline: "${pipe_version}"
+    YAML
 
     # NB: MultiQC 1.21's --data-dir is a BOOLEAN switch, not a path; the parsed
     # data directory name is derived from -n (<report>_data). Passing a path here
@@ -774,11 +789,13 @@ workflow {
         up_ok,
         channel.of(file(params.multiqc_config)),
         channel.of(file(params.multiqc_config_extra)),
-        GROWTH_CHECK.out.mqc                   // F26: growth table, one section
+        GROWTH_CHECK.out.mqc,                  // F26: growth table, one section
+        channel.value(workflow.nextflow.version),   // F37: injected, never hard-coded
+        channel.value(workflow.manifest.version)
     )
 
     onComplete:
-    log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] workflow dir = ${params.project_dir}"
+    log.info "[NextFlow-WGS2GEM v${workflow.manifest.version} on Nextflow ${workflow.nextflow.version}] workflow dir = ${params.project_dir}"
     log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] report       = ${params.multiqc_dir}/${params.report_name}.html"
     log.info "[NextFlow-WGS2GEM v${workflow.manifest.version}] rerun a step = nextflow run . -resume (delete the output to force it)"
 }

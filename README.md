@@ -167,6 +167,8 @@ Snakemake tree — content is still byte-comparable, only the paths moved (F33/D
 
 `results/report/multiqc_report.html` is a single self-contained page that:
 
+> Want the whole thing on one page? **[docs/pipeline-summary.html](docs/pipeline-summary.html)** — architecture, per-step input/output contract, the report field guide, the evidence and the open items.
+>
 > New to the output? **[docs/interpretation.md](docs/interpretation.md)** explains every
 > number in it: what it means, when it indicates a problem, and what it does not prove.
 

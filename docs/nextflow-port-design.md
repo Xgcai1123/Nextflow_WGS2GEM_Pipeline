@@ -1121,6 +1121,15 @@ profiles {
   - **CI**:`run-embed-check.sh` 直接调用脚本并断言(改名 / 百分号 / 单位后缀 / 未映射表头不动 / 排序属性完好 / 幂等)。
   - **重要**:这一步**没有改任何 D4 复用资产** —— 展示层在渲染产物上归一化,所以 `multiqc_config.yaml`、`multiqc_extras.py` 仍与上游字节一致。这也回答了 F34/F35 留下的"D4 要不要偏离"的问题:**格式统一不再需要偏离 D4**。仍剩一项未决:`Snakemake 9.25.2` 那行属于**内容**(版本表数据)而不是**格式**,后处理不应编造版本号,是否编辑复用配置仍需用户决定。
 
+- **F37 版本表纠错:删掉假的 `Snakemake`、补上漏掉的三个工具、引擎版本改为运行时注入（用户要求，2026-10-21）**：用户要求"把这个 Snakemake 的 version 去掉",并顺带核对"所有用到的资源是否正确"。把版本表当成资源清单逐项核对后,发现四类问题:
+  1. **错误陈述**:表里有一行 `Snakemake 9.25.2`。这是**复用的 Snakemake 时代配置**遗留(F34 已记录),而本管线是 Nextflow —— 一个假的版本号比格式问题严重。
+  2. **漏项**:真实使用但没有列的 **BLAST+ 2.17.0**(步骤 5b)和 **COBRApy 0.32.1 + GLPK 5.0**(步骤 9);MEMOTE 用 GLPK 也没写。
+  3. **引擎缺失**:管线跑在 Nextflow 26.10.0 上,版本表里没有任何引擎信息。
+  4. 其余条目逐项核对:**全部正确**(FastQC 0.12.1、Trimmomatic 0.39 + openjdk 17、SPAdes 4.0.0、QUAST 5.2.0、BUSCO 5.8.3、Bakta 1.11.4 + pyhmmer 0.10.15、CarveMe 1.6.6 + diamond 2.2.8 + pyscipopt 5.7.1 + SCIP 9.2.4、MEMOTE 0.17.0、MultiQC 1.21)。注意 `openjdk 17` 看着可疑(别的 env 装的是 25.0.2),但 `envs/trimmomatic.yaml` 确实 pin 了 17、实际装的是 17.0.18,所以它是**对的**。
+  - **做法**:(a) 从 `multiqc_config.yaml` 删掉 Snakemake 组,补 `BLAST: blast 2.17.0`、`Growth check: cobrapy 0.32.1 / glpk 5.0`;(b) **引擎版本不硬编码** —— `MULTIQC` 任务在运行时把 `workflow.nextflow.version` 与 `workflow.manifest.version` 写成 `custom_content/nextflow_mqc_versions.yaml`,MultiQC 通过 `*_mqc_versions.yaml` 搜索规则读入,于是永远跟着实际引擎走(写进 `custom_content/` 而不是任务根目录,因为 multiqc 命令行只扫那几个目录);(c) 顺手在启动横幅里加上引擎版本。
+  - **代价**:`multiqc_config.yaml` 不再与上游字节一致 —— 这是**第一处有意偏离 D4**(记作 D24),已在 `docs/asset-sources.md` 就地注明并更新 sha256,同时写明"上游同步时要保留这一处改动"。
+  - **验证**:重放生成的报告里版本表为 BLAST / BUSCO / Bakta / CarveMe / FastQC / Growth check / MEMOTE / MultiQC / NextFlow-WGS2GEM 0.1.0 / Nextflow 26.10.0 / QUAST / SPAdes / Trimmomatic,**`Snakemake` 已不存在**。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1228,6 +1237,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D20 | 参照比对**独立成步**(`ASSEMBLY_REF`,BLASTN,Bakta 环境),**不用** QUAST 的 `-r`:后者在 arm64 macOS 上自带 minimap2 编译失败并**静默降级**成无参照统计(且无外部比对器入口)。阈值取 QUAST 默认(≥95 % identity、≥65 bp)以便与标准 dnadiff 可比;参照不匹配时 **exit 2**;QUAST 输出保持逐字节一致 | 已定(2026-10-15,用户与导师反馈 #2,F30) |
 | D21 | 生长检查**同时断言得率**(gDW/g,窗口 0.30–0.70),不只断言 μ：μ 强依赖介质的吸收上限这一约定,得率不依赖(它是生物质化学计量);摩尔质量由介质文件声明(`carbon_source_mw`)而非代码硬编码。敏感度表写入介质文件与 `docs/interpretation.md` | 已定(2026-10-15,用户与导师反馈 #3,F31) |
 | D23 | 目录结构:**`data/` = 输入**(raw/db/reference/cache)、**`results/` = 产物**(qc/reads/assembly/annotation/models/report)、`logs/`+`benchmarks/` = 运行账本、`work/`+`.nextflow/` = 引擎;**不再镜像 Snakemake 输出树**(内容仍逐字节可比,只换路径)。MULTIQC 只发布报告本体与其数据目录;Nextflow 自身 report/trace 固定 `results/report/nextflow/` 且在 CI 关闭;AMR 缓存经 `WGS_AMR_GUARD_CACHE` 落在 `data/cache/` | 已定(2026-10-21,用户反馈,F33) |
+| D24 | **允许对复用资产做一处有意偏离**:`multiqc_config.yaml` 的 `software_versions` 段删掉假的 `Snakemake 9.25.2`、补上 BLAST+/COBRApy/GLPK;引擎版本改为运行时注入(`*_mqc_versions.yaml`)。理由:假版本号属于**错误陈述**而非风格;D4 的字节一致是为省同步成本,不能以保留错误为代价。资产 sha256 与背离原因已记入 `docs/asset-sources.md` | 已定(2026-10-21,用户要求,F37) |
 
 ## 17. 里程碑与后续开放问题
 

@@ -75,11 +75,21 @@ software_versions:
     scip: "9.2.4"
   MEMOTE:
     memote: "0.17.0"
-  # Pipeline drivers.
-  Snakemake:
-    snakemake: "9.25.2"
+  # No module reports these either: the reference comparison (step 5b) and the
+  # growth check (step 9) run outside any MultiQC-aware tool.
+  BLAST:
+    blast: "2.17.0"          # step 5b, from the pinned Bakta environment
+  Growth check:
+    cobrapy: "0.32.1"        # step 9 (module `cobra`)
+    glpk: "5.0"              # solver for step 9 and for MEMOTE
   MultiQC:
     multiqc: "1.21"
+  # NOTE: the pipeline engine is NOT listed here. `Snakemake 9.25.2` used to be,
+  # because this file was written for the Snakemake original and later reused
+  # byte-identically -- a stale claim in a Nextflow pipeline (F34/F37). The engine
+  # version is now injected at run time by the MULTIQC task into
+  # `nextflow_mqc_versions.yaml`, which MultiQC picks up through the
+  # `*_mqc_versions.yaml` search pattern, so it can never drift.
 
 custom_data:
 

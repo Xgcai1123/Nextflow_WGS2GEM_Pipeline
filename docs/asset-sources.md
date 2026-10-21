@@ -8,6 +8,14 @@
 | 复制方式 | 字节一致副本（`cmp` 逐文件校验通过，sha256 见下） |
 | 同步策略 | 手动同步（开放问题 #1 已定）；上游改动时重新复制并更新本表 |
 
+> **一处有意的偏离(2026-10-21，F37/D24）**：`multiqc_config.yaml` 的 `software_versions`
+> 段不再与上游字节一致。原文件为 Snakemake 版本写成,里面有一行 `Snakemake 9.25.2`;
+> 移植后这是**错误陈述**(本管线用 Nextflow),另有三项真实使用但未列出的工具
+> (BLAST+、COBRApy、GLPK)。因此删掉了 Snakemake 行、补上三项,并把**引擎版本改为运行时注入**
+> (MULTIQC 任务写 `custom_content/nextflow_mqc_versions.yaml`,MultiQC 通过
+> `*_mqc_versions.yaml` 规则读取),所以它永远不会漂移。除这一节外,该文件仍与上游一致;
+> 上游若更新,同步时需保留这一处改动。新的 sha256 已写入上表。
+
 ## 复制清单与校验和
 
 | 目标路径 | sha256 |
@@ -24,7 +32,7 @@
 | `scripts/memote_report.py` | `1df2624050b7c2ce8b10c51ba421f37a2db60c67e6c5b1e6312ef7543a6b0a68` |
 | `scripts/bin/bakta` | `04017dd727cb8e616e6454027696ad027c0d7fe92afef19e8bc56fd20f9b32fc` |
 | `scripts/amr_guard/amr_chunk_guard.py` | `2f682299aaafef44a391ab3bd08430795dfc88e1868d9a50e009eb7afa4ae899` |
-| `multiqc_config.yaml` | `4b6c671385ef22dabc3d7848a454d868f2ff782499550990c1e00303feb16b9a` |
+| `multiqc_config.yaml` | `d73abe1b9a1215e8ad553739d92752e96ef69d31718985bc6d4eebe8006b3f1c` |
 | `samples.tsv` | `cb9c883250ee44b928c779a5a1be8461c9d8155b7043cce88575bde23772b2e0` |
 
 ## 说明

@@ -202,6 +202,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The versions table no longer claims `Snakemake`, and now lists what actually ran.** It carried
+  a `Snakemake 9.25.2` row — a stale claim inherited from the reused Snakemake-era config — while
+  omitting three tools the pipeline really uses (BLAST+ 2.17.0 for the reference comparison,
+  COBRApy 0.32.1 and GLPK 5.0 for the growth check). All other entries were checked against the
+  installed environments and are correct. The engine version is no longer hard-coded: the MULTIQC
+  task writes `custom_content/nextflow_mqc_versions.yaml` from `workflow.nextflow.version`, so the
+  table always names the Nextflow that actually ran (F37).
+- **`docs/pipeline-summary.html` — the whole pipeline on one self-contained page.** Architecture
+  and DAG, the annotated project tree, a per-step input/output/consumer contract, the configuration
+  reference, the report's section tour and field guide, the twenty questions the numbers raise, the
+  validation evidence, the quality gates, the limits, and how to run it. No external assets; prints
+  cleanly; hand-written rather than generated.
 - **Every table header now follows one convention.** `Sample` as the first column,
   `Quantity, qualifier (unit)` as the shape, units in the header only, counts unitless, and one
   quantity under one name: 27 headers normalised and 76 cell units dropped in the current report.

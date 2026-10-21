@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NextFlow-WGS2GEM — pipeline reference</title>
+<style>
+  :root {
+    --navy:#0f223d; --teal:#178fa0; --grey:#535f6d; --line:#d3dae3;
+    --bg:#fbfcfd; --panel:#f1f4f8; --warn:#b06a00; --ok:#1b6e40; --bad:#a32a2a;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:#1c2733;
+         font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  header { background:var(--navy); color:#fff; padding:34px 40px 26px; }
+  header h1 { margin:0 0 6px; font-size:28px; letter-spacing:.2px; }
+  header p { margin:0; color:#bfd4e2; max-width:900px; }
+  header .meta { margin-top:14px; font-size:13px; color:#8fc7d4; }
+  main { max-width:1180px; margin:0 auto; padding:28px 40px 90px; }
+  nav { background:#fff; border:1px solid var(--line); border-radius:8px;
+        padding:14px 20px; margin:22px 0 8px; }
+  nav b { color:var(--navy); }
+  nav a { color:var(--teal); text-decoration:none; margin-right:14px; white-space:nowrap; }
+  h2 { margin:44px 0 10px; font-size:22px; color:var(--navy);
+       border-bottom:2px solid var(--teal); padding-bottom:6px; }
+  h3 { margin:26px 0 8px; font-size:17px; color:var(--navy); }
+  h4 { margin:18px 0 6px; font-size:15px; color:var(--grey); }
+  p, li { max-width:980px; }
+  table { border-collapse:collapse; width:100%; margin:12px 0 8px; font-size:13.5px; }
+  th, td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:var(--navy); color:#fff; font-weight:600; }
+  tbody tr:nth-child(even) { background:var(--panel); }
+  code, pre { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; }
+  code { background:#eef2f6; padding:1px 5px; border-radius:3px; }
+  pre { background:#0f223d; color:#e8eef5; padding:14px 16px; border-radius:8px;
+        overflow:auto; line-height:1.45; }
+  pre .c { color:#8fc7d4; }
+  .note { background:var(--panel); border-left:4px solid var(--teal); padding:10px 14px; margin:14px 0; }
+  .warn { background:#fdf3e3; border-left:4px solid var(--warn); padding:10px 14px; margin:14px 0; }
+  .ok   { color:var(--ok); font-weight:600; }
+  .bad  { color:var(--bad); font-weight:600; }
+  .small { font-size:12.5px; color:var(--grey); }
+  details { border:1px solid var(--line); border-radius:6px; margin:8px 0; background:#fff; }
+  details summary { cursor:pointer; padding:9px 12px; font-weight:600; color:var(--navy); }
+  details[open] summary { border-bottom:1px solid var(--line); }
+  details .body { padding:10px 14px 14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .card h4 { margin:0 0 6px; color:var(--navy); font-size:14px; }
+  .step { border:1px solid var(--line); border-radius:8px; background:#fff; padding:14px 16px; margin:14px 0; }
+  .step h3 { margin:0 0 8px; }
+  .step .tag { display:inline-block; background:var(--navy); color:#fff; border-radius:20px;
+               padding:1px 10px; font-size:12px; margin-left:8px; vertical-align:middle; }
+  .step .tag.opt { background:var(--grey); }
+  .io { display:grid; grid-template-columns:88px 1fr; gap:4px 10px; font-size:13.5px; }
+  .io dt { color:var(--grey); font-weight:600; }
+  .io dd { margin:0; }
+  footer { border-top:1px solid var(--line); margin-top:50px; padding-top:14px;
+           color:var(--grey); font-size:12.5px; }
+  @media print { body { background:#fff; } nav { display:none; } pre { background:#f4f6f8; color:#111; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>NextFlow-WGS2GEM — pipeline reference</h1>
+  <p>Bacterial whole-genome sequencing to a draft genome-scale metabolic model. A Nextflow DSL2
+     port of the Snakemake WGSpipeline: QC, assembly, annotation, model reconstruction,
+     model evaluation, and one self-contained report.</p>
+  <div class="meta">version 0.1.0 · Nextflow ≥ 25.10 (validated on 26.10.0) · MIT ·
+      https://github.com/MeMoModelling/NextFlow-WGS2GEM</div>
+</header>
+
+<main>
+
+<nav>
+  <b>Contents</b><br>
+  <a href="#what">1 What it does</a>
+  <a href="#structure">2 Project structure</a>
+  <a href="#dag">3 The DAG</a>
+  <a href="#steps">4 Step-by-step contract</a>
+  <a href="#config">5 Configuration</a>
+  <a href="#outputs">6 Outputs</a>
+  <a href="#report">7 The report</a>
+  <a href="#faq">8 Reading the numbers</a>
+  <a href="#evidence">9 Evidence</a>
+  <a href="#gates">10 Quality gates</a>
+  <a href="#limits">11 Limits &amp; open items</a>
+  <a href="#run">12 Running it</a>
+</nav>
+
+<h2 id="what">1 · What it does</h2>
+<p>One command turns paired-end Illumina reads into a draft model plus the evidence needed to
+judge it. Eleven pipeline steps, one optional extra one, twelve Nextflow processes. Every
+per-sample step is an independent branch of a dataflow graph: whatever is ready runs, whatever
+does not fit the CPU budget queues (see §4 for which steps serialise).</p>
+
+<div class="grid">
+  <div class="card"><h4>Inputs</h4>A sample sheet (one row per isolate), paired-end FASTQ,
+    reference databases (Bakta, BUSCO), and optionally one public reference genome per isolate.</div>
+  <div class="card"><h4>Outputs</h4><code>results/</code>: per-step QC, the derived data, the
+    models, the report. <code>data/</code> is input only; a run writes nowhere else.</div>
+  <div class="card"><h4>Deliverables</h4><code>results/models/carveme/&lt;sample&gt;/&lt;sample&gt;.xml</code>
+    (the model) and <code>results/report/multiqc_report.html</code> (everything else).</div>
+  <div class="card"><h4>Measured on</h4>Two <i>E. coli</i> isolates: K-12 (SRR1770413) and
+    O157:H7 (SRR10194530). ~38 min on an idle 8-core host.</div>
+</div>
+
+<h2 id="structure">2 · Project structure</h2>
+<p>Two roots and nothing else: <code>data/</code> is what goes in, <code>results/</code> is what
+comes out. <code>logs/</code>, <code>benchmarks/</code>, <code>work/</code> and
+<code>.nextflow/</code> are run bookkeeping. Nothing generated is committed.</p>
+
+<pre><span class="c"># sources (tracked)</span>
+main.nf                     the whole workflow: validation + 12 processes, one file
+nextflow.config             every parameter, output path, resource directive
+samples.tsv                 the cohort (a worked example: two E. coli isolates)
+samples.with_reference.tsv  the same cohort with the optional `reference` column
+envs/                       8 pinned conda environments (one per tool group)
+scripts/                    helper programs; bin/task_env.sh writes benchmarks/
+media/m9_aerobic.yaml       the declared growth medium
+multiqc_config.yaml         MultiQC config (loaded first)
+multiqc_nextflow.yaml       presentation overlay (section order, normalised headers)
+docs/                       design record (F/D items), interpretation guide, this page
+tests/ci/                   7 tool-free checks + fixtures
+.github/workflows/ci.yml    4 CI jobs on every push
+
+<span class="c"># data (git-ignored)</span>
+data/raw/&lt;fq1,fq2&gt;          paired-end FASTQ
+data/db/bakta/db-light/     Bakta database (version.json is the upgrade sentinel)
+data/db/busco/              BUSCO lineage cache
+data/reference/&lt;acc&gt;.fasta  optional NCBI reference genomes (step 5b)
+data/cache/amr_guard/       persistent AMR-guard cache (saves ~5.5 min/sample)
+
+<span class="c"># results (git-ignored)</span>
+results/qc/fastqc_raw/      FastQC on raw reads
+results/qc/fastqc_trimmed/  FastQC on trimmed reads
+results/qc/quast/           QUAST per sample
+results/qc/busco/           BUSCO per sample
+results/qc/refcompare/      assembly vs reference (step 5b)
+results/reads/              trimmed reads
+results/assembly/           SPAdes output per sample
+results/annotation/         Bakta output per sample
+results/models/carveme/     the draft model (SBML) + its diamond table
+results/models/memote/      MEMOTE HTML + JSON + score TSV
+results/models/growth/      growth + yield check (one cohort-level table)
+results/report/             multiqc_report.html, multiqc_report_data/, nextflow/</pre>
+
+<p class="small">Generated from the tracked file list by <code>docs/make_structure.py</code>; see
+<code>docs/project-structure.md</code> for the annotated version, which cannot drift because the
+generator refuses to run when a tracked file is unclassified.</p>
+
+<h2 id="dag">3 · The DAG</h2>
+<pre>                                    ┌──────────────┐
+  data/raw/&lt;sample&gt;_{1,2}.fastq.gz ─┤ 1 FASTQC_RAW │──html+zip──────────────┐
+                │                   └──────────────┘                        │
+                │                   ┌──────────────┐                        │
+                ├───────────────────┤2 TRIMMOMATIC │──paired reads──┐       │
+                │                   └──────────────┘                │       │
+                │                                                   ▼       │
+                │                                   ┌───────────────────┐   │
+                │                                   │3 FASTQC_TRIMMED   │───┤
+                │                                   └───────────────────┘   │
+                │                                                   │       │
+                │                                                   ▼       │
+                │                                   ┌───────────────────┐   │
+                └────(the raw pair, unchanged)─────►│ 4 SPADES          │   │
+                                                    └─────────┬─────────┘   │
+                            contigs.fasta ┌───────────────────┼─────────────┤
+                                          ▼                   ▼             ▼
+                                  ┌──────────────┐   ┌──────────────┐  ┌──────────────┐
+                                  │ 5 QUAST      │   │ 6 BUSCO      │  │ 7 BAKTA      │
+                                  └──────┬───────┘   └──────┬───────┘  └──────┬───────┘
+                                         │                  │                 │ .faa
+                                  ┌──────┴───────┐          │                 ▼
+                                  │ 5b ASSEMBLY_ │          │        ┌──────────────┐
+                                  │    REF (opt) │          │        │ 8 CARVEME    │
+                                  └──────┬───────┘          │        └──────┬───────┘
+                                         │                  │               │ .xml
+                                         │                  │      ┌────────┴────────┐
+                                         │                  │      ▼                 ▼
+                                         │                  │ ┌──────────┐   ┌──────────────┐
+                                         │                  │ │9 GROWTH  │   │10 MEMOTE     │
+                                         │                  │ │  CHECK   │   │ (after 9)    │
+                                         │                  │ └────┬─────┘   └──────┬───────┘
+                                         ▼                  ▼      ▼                ▼
+                                  ┌───────────────────────────────────────────────────────┐
+                                  │ 11 MULTIQC  → results/report/multiqc_report.html       │
+                                  └───────────────────────────────────────────────────────┘</pre>
+
+<div class="note"><b>Two facts about this graph that surprise people.</b>
+First, steps 1 and 2 are <i>parallel</i> branches off the same input: FastQC is not a gate for
+trimming, so killing FastQC does not stop the assembly. Second, everything from step 4 onwards is
+per sample and independent — one sample failing does not stop the other
+(<code>errorStrategy = 'finish'</code>).</div>
+
+<h4>What runs in parallel, and what does not</h4>
+<table>
+<thead><tr><th>step</th><th>declared cpus</th><th>behaviour on an 8-core host</th></tr></thead>
+<tbody>
+<tr><td>1 / 3 FastQC</td><td>4</td><td>two files at a time</td></tr>
+<tr><td>2 Trimmomatic</td><td>8</td><td><b>serial across samples</b> — one task takes the whole host</td></tr>
+<tr><td>4 SPAdes</td><td>8</td><td><b>serial across samples</b> — this dominates total runtime</td></tr>
+<tr><td>5 QUAST</td><td>1</td><td>all samples at once</td></tr>
+<tr><td>5b reference comparison</td><td>2</td><td>all samples at once</td></tr>
+<tr><td>6 BUSCO / 7 Bakta / 8 CarveMe / 10 MEMOTE</td><td>4</td><td>two samples at a time</td></tr>
+<tr><td>9 growth check / 11 MultiQC</td><td>1</td><td>one cohort-level task, waits for every sample</td></tr>
+</tbody></table>
+<p class="small">Measured on the complete run: SPAdes for sample A ran 12:49:25–12:54:29 and
+sample B started at 12:54:29, to the second. <code>-profile lowmem</code> halves Spades/Trimmomatic
+to 4 cpus so two samples assemble concurrently.</p>
+
+<h2 id="steps">4 · Step-by-step contract</h2>
+<p>For each step: exactly what goes in, what it produces, and who consumes the output. Paths are
+relative to the project root; <code>&lt;sample&gt;</code> is the <code>sample</code> column of the
+sheet.</p>
+
+<div class="step">
+<h3>1 · FASTQC_RAW <span class="tag">per sample × 2 files</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>data/raw/&lt;fq1&gt;</code>, <code>data/raw/&lt;fq2&gt;</code> — the raw
+    pair, read-only, never modified</dd>
+  <dt>tool</dt><dd>FastQC 0.12.1 (<code>--threads $task.cpus</code>)</dd>
+  <dt>output</dt><dd><code>results/qc/fastqc_raw/&lt;sample&gt;_{1,2}_fastqc.html</code> and
+    <code>…_fastqc.zip</code></dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b>, which parses the two <code>.zip</code> files
+    (the <code>.html</code> is for humans)</dd>
+</dl>
+<p class="small">Runs <i>in parallel</i> with step 2 — trimming does not wait for this, and a
+FastQC failure does not stop it. That is why the failure-isolation test kills both entry points.</p>
+</div>
+
+<div class="step">
+<h3>2 · TRIMMOMATIC <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd>the same raw pair (<code>fq1</code>, <code>fq2</code>)</dd>
+  <dt>tool</dt><dd>Trimmomatic 0.39, <code>LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:36</code>
+    (the original pipeline's settings, verbatim)</dd>
+  <dt>output</dt><dd><code>results/reads/&lt;sample&gt;_R1_paired.fastq.gz</code>,
+    <code>…_R1_unpaired.fastq.gz</code>, <code>…_R2_paired.fastq.gz</code>,
+    <code>…_R2_unpaired.fastq.gz</code></dd>
+  <dt>consumed by</dt><dd><b>3 FASTQC_TRIMMED</b> (paired only) and <b>4 SPADES</b> (paired only).
+    The unpaired reads are written for completeness and used by nothing.</dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>3 · FASTQC_TRIMMED <span class="tag">per sample × 2 files</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/reads/&lt;sample&gt;_R{1,2}_paired.fastq.gz</code></dd>
+  <dt>tool</dt><dd>FastQC 0.12.1</dd>
+  <dt>output</dt><dd><code>results/qc/fastqc_trimmed/&lt;sample&gt;_R{1,2}_paired_fastqc.{html,zip}</code></dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b> (zips)</dd>
+</dl>
+<p class="small">Exists so the report can show the <i>effect</i> of step 2, not just its success.</p>
+</div>
+
+<div class="step">
+<h3>4 · SPADES <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/reads/&lt;sample&gt;_R1_paired.fastq.gz</code> + <code>…_R2_paired</code></dd>
+  <dt>tool</dt><dd>SPAdes 4.0.0 <code>--careful</code>, <code>--threads $task.cpus</code></dd>
+  <dt>output</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code> plus SPAdes' own side
+    products (the whole task directory is published)</dd>
+  <dt>consumed by</dt><dd>everything downstream: <b>5 QUAST</b>, <b>5b ASSEMBLY_REF</b>,
+    <b>6 BUSCO</b>, <b>7 BAKTA</b></dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>5 · QUAST <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code></dd>
+  <dt>tool</dt><dd>QUAST 5.2.0, <code>--labels &lt;sample&gt;</code> (mandatory: every input is
+    called <code>contigs.fasta</code>), <code>--min-contig</code>, <code>--threads 1</code></dd>
+  <dt>output</dt><dd><code>results/qc/quast/&lt;sample&gt;/{report.html, report.txt, report.tsv}</code></dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b>: <code>report.tsv</code> becomes the
+    <i>QUAST</i> table, <code>report.html</code> is embedded as <i>QUAST: full report</i></dd>
+</dl>
+<p class="small">QUAST's own reference mode (<code>-r</code>) is deliberately not used — see
+§11. Output is byte-identical to the original pipeline.</p>
+</div>
+
+<div class="step">
+<h3>5b · ASSEMBLY_REF <span class="tag opt">optional</span><span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code> + the FASTA named in
+    that row's <code>reference</code> column (resolved against <code>--ref_dir</code>)</dd>
+  <dt>tool</dt><dd>BLASTN 2.17.0 (<code>-task megablast</code>) via
+    <code>scripts/compare_assembly_ref.py</code>; thresholds are QUAST's defaults
+    (identity ≥ 95 %, alignment ≥ 65 bp)</dd>
+  <dt>output</dt><dd><code>results/qc/refcompare/&lt;sample&gt;/&lt;sample&gt;_refcomp.tsv</code>
+    (18 metrics) and <code>…_assembly_ref_mqc.tsv</code> (the report row)</dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b> only</dd>
+</dl>
+<p class="small">Runs <i>only</i> for rows with a reference: no reference, no task, no report
+section. A reference that matches nothing fails the task (exit 2) rather than publishing zeroes.</p>
+</div>
+
+<div class="step">
+<h3>6 · BUSCO <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code></dd>
+  <dt>tool</dt><dd>BUSCO 5.8.3, lineage <code>enterobacterales_odb10</code> (440 markers)</dd>
+  <dt>output</dt><dd><code>results/qc/busco/&lt;sample&gt;/short_summary.specific.enterobacterales_odb10.&lt;sample&gt;.{json,txt}</code></dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b> (the summaries are staged by symlink, per sample)</dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>7 · BAKTA <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code> plus
+    <code>data/db/bakta/db-light/version.json</code>, which is consumed as a
+    <b>database-upgrade sentinel</b>: change the database and every annotation re-runs</dd>
+  <dt>tool</dt><dd>Bakta 1.11.4 through <code>scripts/amr_guard</code> (a PATH wrapper that
+    survives the AMRFinderPlus crash on one problematic protein; its cache lives in
+    <code>data/cache/amr_guard/</code>)</dd>
+  <dt>output</dt><dd><code>results/annotation/&lt;sample&gt;/&lt;sample&gt;.{gff3,faa,ffn,gbff,tsv,txt}</code></dd>
+  <dt>consumed by</dt><dd><b>8 CARVEME</b>, which takes <code>&lt;sample&gt;.faa</code></dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>8 · CARVEME <span class="tag">per sample</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/annotation/&lt;sample&gt;/&lt;sample&gt;.faa</code> — <b>staged into a
+    private copy first</b>; the annotation directory itself is never handed to CarveMe (F-earlier:
+    CarveMe writes next to its input)</dd>
+  <dt>tool</dt><dd>CarveMe 1.6.6, solver SCIP 9.2.4</dd>
+  <dt>output</dt><dd><code>results/models/carveme/&lt;sample&gt;/&lt;sample&gt;.xml</code> (the model),
+    <code>…_carveme.faa</code>, <code>….tsv</code> (diamond hits)</dd>
+  <dt>consumed by</dt><dd><b>9 GROWTH_CHECK</b> (all <code>.xml</code> at once) and
+    <b>10 MEMOTE</b> (one <code>.xml</code> per task)</dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>9 · GROWTH_CHECK <span class="tag">one task for the cohort</span></h3>
+<dl class="io">
+  <dt>input</dt><dd>every <code>results/models/carveme/*/*.xml</code> (collected),
+    <code>media/m9_aerobic.yaml</code>, <code>scripts/check_growth.py</code></dd>
+  <dt>tool</dt><dd>COBRApy 0.32.1 + GLPK 5.0 (flux balance analysis)</dd>
+  <dt>output</dt><dd><code>results/models/growth/growth_mqc.tsv</code> (the report table) and
+    <code>results/models/growth/growth.tsv</code> (one row per sample, every metric)</dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b>; it also emits a trigger that <b>10 MEMOTE</b> waits
+    for, which is how "check viability before the expensive suite" is enforced</dd>
+</dl>
+<p class="small">Deliberately one task, not one per sample: the report section is one table with a
+row per sample. It writes no benchmark record (that would surface as a raw column).</p>
+</div>
+
+<div class="step">
+<h3>10 · MEMOTE <span class="tag">per sample, after 9</span></h3>
+<dl class="io">
+  <dt>input</dt><dd><code>results/models/carveme/&lt;sample&gt;/&lt;sample&gt;.xml</code> + the
+    ordering trigger from step 9</dd>
+  <dt>tool</dt><dd>MEMOTE 0.17.0, GLPK</dd>
+  <dt>output</dt><dd><code>results/models/memote/&lt;sample&gt;/{index.html, memote_result.json,
+    memote_summary.tsv}</code></dd>
+  <dt>consumed by</dt><dd><b>11 MULTIQC</b>: the TSV becomes the <i>MEMOTE</i> score table, the
+    HTML is embedded as <i>MEMOTE: full report</i> for that sample</dd>
+</dl>
+</div>
+
+<div class="step">
+<h3>11 · MULTIQC <span class="tag">one task for the cohort</span></h3>
+<dl class="io">
+  <dt>input</dt><dd>the FastQC zips (raw + trimmed), <code>results/qc/quast/*/report.tsv</code>,
+    the staged BUSCO summaries, the custom tables (CarveMe size, MEMOTE scores, growth, reference
+    comparison, per-step runtimes), the two MultiQC configs, and
+    <code>custom_content/nextflow_mqc_versions.yaml</code> (the engine version, written at run time)</dd>
+  <dt>tool</dt><dd>MultiQC 1.21, then <code>scripts/normalize_report.py</code></dd>
+  <dt>output</dt><dd><code>results/report/multiqc_report.html</code> (self-contained),
+    <code>results/report/multiqc_report_data/</code> (parsed data), and Nextflow's own
+    <code>results/report/nextflow/{report.html,trace.tsv}</code></dd>
+  <dt>consumed by</dt><dd>a human. Nothing in the pipeline reads it back.</dd>
+</dl>
+<p class="small">The normaliser rewrites the visible header text into one convention and drops a
+unit from a cell when the header already carries it; sortable attributes, plots and CSV export are
+untouched.</p>
+</div>
+
+<h2 id="config">5 · Configuration</h2>
+<table>
+<thead><tr><th>parameter</th><th>default</th><th>meaning</th></tr></thead>
+<tbody>
+<tr><td><code>samples_tsv</code></td><td><code>samples.tsv</code></td><td>the cohort</td></tr>
+<tr><td><code>raw_dir</code></td><td><code>data/raw</code></td><td>base directory for <code>fq1</code>/<code>fq2</code></td></tr>
+<tr><td><code>ref_dir</code></td><td><code>data/reference</code></td><td>base directory for the <code>reference</code> column</td></tr>
+<tr><td><code>bakta_db</code></td><td><code>data/db/bakta/db-light</code></td><td>Bakta database; <code>version.json</code> is the sentinel</td></tr>
+<tr><td><code>busco_db</code></td><td><code>data/db/busco</code></td><td>BUSCO lineage cache</td></tr>
+<tr><td><code>amr_cache</code></td><td><code>data/cache/amr_guard/known_bad_sequences.tsv</code></td><td>AMR-guard cache (persistent across runs)</td></tr>
+<tr><td><code>threads_default</code></td><td><code>8</code></td><td>cpus for Trimmomatic and SPAdes</td></tr>
+<tr><td><code>busco_lineage</code></td><td><code>enterobacterales_odb10</code></td><td>also decides the BUSCO filenames the report looks for</td></tr>
+<tr><td><code>carveme_solver</code> / <code>memote_solver</code></td><td><code>scip</code> / <code>glpk</code></td><td>cplex/gurobi need a licence</td></tr>
+<tr><td><code>quast_min_contig</code></td><td><code>0</code></td><td><code>0</code> = count every contig</td></tr>
+<tr><td><code>min_free_disk_gb</code></td><td><code>20</code></td><td>pre-flight floor; the run aborts before any task if unmet; <code>0</code> disables</td></tr>
+<tr><td><code>report_tag</code></td><td><code>""</code></td><td>suffix for <code>multiqc_report[_tag].html</code></td></tr>
+<tr><td><code>growth_medium</code></td><td><code>media/m9_aerobic.yaml</code></td><td>the declared medium (versioned in the repo)</td></tr>
+</tbody></table>
+
+<h4>Sample sheet</h4>
+<pre>sample      fq1                        fq2                        species            strain    reference
+SRR1770413  SRR1770413_1.fastq.gz      SRR1770413_2.fastq.gz      Escherichia coli   K-12      GCA_000005845.2.fasta
+SRR10194530 SRR10194530_1.fastq.gz     SRR10194530_2.fastq.gz     Escherichia coli   O157:H7   GCA_000008865.2.fasta</pre>
+<p class="small">Required: <code>sample fq1 fq2</code>. Everything else is carried through.
+<code>reference</code> is optional per row; a value that does not exist aborts before any task.</p>
+
+<h2 id="outputs">6 · Outputs</h2>
+<table>
+<thead><tr><th>path</th><th>contents</th></tr></thead>
+<tbody>
+<tr><td><code>results/qc/fastqc_raw/</code></td><td>FastQC html + zip, one pair per file</td></tr>
+<tr><td><code>results/qc/fastqc_trimmed/</code></td><td>ibid. after trimming</td></tr>
+<tr><td><code>results/qc/quast/&lt;sample&gt;/</code></td><td><code>report.html</code>, <code>report.txt</code>, <code>report.tsv</code></td></tr>
+<tr><td><code>results/qc/busco/&lt;sample&gt;/</code></td><td>short summaries (json + txt)</td></tr>
+<tr><td><code>results/qc/refcompare/&lt;sample&gt;/</code></td><td>18-metric TSV + the report row</td></tr>
+<tr><td><code>results/reads/</code></td><td>4 trimmed FASTQ per sample</td></tr>
+<tr><td><code>results/assembly/&lt;sample&gt;/</code></td><td><code>contigs.fasta</code> + SPAdes side products</td></tr>
+<tr><td><code>results/annotation/&lt;sample&gt;/</code></td><td>gff3, faa, ffn, gbff, tsv, txt</td></tr>
+<tr><td><code>results/models/carveme/&lt;sample&gt;/</code></td><td><code>&lt;sample&gt;.xml</code> (the model), faa, diamond tsv</td></tr>
+<tr><td><code>results/models/memote/&lt;sample&gt;/</code></td><td>index.html, memote_result.json, memote_summary.tsv</td></tr>
+<tr><td><code>results/models/growth/</code></td><td>growth_mqc.tsv, growth.tsv</td></tr>
+<tr><td><code>results/report/</code></td><td>multiqc_report.html, multiqc_report_data/, nextflow/</td></tr>
+<tr><td><code>logs/</code>, <code>benchmarks/</code></td><td>per-step logs, per-step wall times</td></tr>
+</tbody></table>
+
+<h2 id="report">7 · The report</h2>
+<p>Thirteen sections, in pipeline order, so the report reads like the workflow. Two aggregate
+tables mix per-file and per-sample metrics — that is where most confusion starts.</p>
+
+<table>
+<thead><tr><th>#</th><th>section</th><th>what it answers</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>General Statistics</td><td>one wide table: read QC (per file) + assembly + model, merged</td></tr>
+<tr><td>1</td><td>FastQC</td><td>read-level quality, raw and trimmed side by side</td></tr>
+<tr><td>2</td><td>QUAST: assembly QC</td><td>contiguity and size</td></tr>
+<tr><td>3</td><td>Assembly vs reference genome</td><td>is this the organism (and strain) the sheet claims?</td></tr>
+<tr><td>4</td><td>QUAST: full report</td><td>QUAST's own interactive page, embedded per sample</td></tr>
+<tr><td>5</td><td>BUSCO</td><td>gene-space completeness (C/S/D/F/M)</td></tr>
+<tr><td>6</td><td>CarveMe: draft model size</td><td>reactions / metabolites / genes / compartments</td></tr>
+<tr><td>7</td><td>Growth on defined medium</td><td>does the model grow, and on what</td></tr>
+<tr><td>8</td><td>MEMOTE: model quality</td><td>consistency and annotation scorecard</td></tr>
+<tr><td>9–10</td><td>MEMOTE: full report ×2</td><td>each sample's complete snapshot, embedded</td></tr>
+<tr><td>11</td><td>Per-step runtimes</td><td>wall time per step</td></tr>
+<tr><td>12</td><td>Software versions</td><td>every tool, solver and engine that ran</td></tr>
+</tbody></table>
+
+<h3 id="faq">8 · Reading the numbers — the questions everyone asks</h3>
+<p>Twenty questions, grouped. The full field guide for every column is in
+<code>docs/interpretation.md</code>.</p>
+
+<h4>Method</h4>
+<details><summary>Why not use QUAST's own reference mode (<code>-r</code>)?</summary><div class="body">
+<p>It compiles a bundled minimap2 on first use, and on arm64 macOS that compile fails
+(<code>-msse2</code>, <code>-mfpu=</code> are x86/Linux flags). QUAST then only <i>warns</i> and
+silently falls back to reference-independent statistics, and it has no hook for an external
+aligner. Step 5b therefore does the comparison with BLASTN at QUAST's own thresholds, which also
+keeps QUAST's output byte-identical to the original pipeline.</p></div></details>
+
+<details><summary>Are the genome-fraction numbers comparable with dnadiff?</summary><div class="body">
+<p>Conceptually yes, and the thresholds are the same. The aligner differs, so treat <code>99.38</code>
+as "essentially complete", not as a value to compare with a published 99.4.</p></div></details>
+
+<details><summary>Why does a low genome fraction not mean a broken assembly?</summary><div class="body">
+<p>The reference is a yardstick, not a truth claim. Sakai is one O157:H7 isolate; this project's
+O157:H7 sample recovers 97.37 % of it at 99.72 % identity with four times the mismatch rate of the
+K-12 sample — the signature of a different strain of the same serotype. The task fails only when
+a reference matches <i>nothing</i>.</p></div></details>
+
+<details><summary>Why are both samples' growth rates identical?</summary><div class="body">
+<p>Both models share CarveMe's template biomass equation and the same declared medium, so the
+optimum is set by the medium, not by the isolate. Do not use it to compare strains.</p></div></details>
+
+<details><summary>Where does the 66 h⁻¹ column come from?</summary><div class="body">
+<p>It is CarveMe's shipped medium with all 342 exchange reactions open: the cell imports every
+amino acid, nucleotide, vitamin and metal, so the objective measures how fast biomass can be
+assembled from ready-made parts. It is the number that would have been reported as "growth" if
+nobody declared a medium.</p></div></details>
+
+<h4>Numbers that look contradictory</h4>
+<details><summary>Why does one sample appear as five rows in General Statistics?</summary><div class="body">
+<p>FastQC runs per FASTQ file (four per sample); assembly and model steps run per sample. The
+aggregate table has one row per entity, so an isolate appears as <code>SRR1770413</code> plus
+<code>_1</code>, <code>_2</code>, <code>_R1_paired</code>, <code>_R2_paired</code>. Blank cells
+mean "not applicable at this granularity".</p></div></details>
+
+<details><summary>There are two GC columns — which is the genome's?</summary><div class="body">
+<p><code>Assembly GC (%)</code> (QUAST, 50.34). <code>Reads GC (%)</code> is measured on the reads
+(FastQC, 50). They agree here, which is the expected sanity check; a divergence points at
+contamination or a wrong species.</p></div></details>
+
+<details><summary><code>L50</code> is a count — why does it print <code>8.0</code>?</summary><div class="body">
+<p>MultiQC formats every numeric column with one decimal; the header says <code>(contigs)</code>.
+It used to be worse: the QUAST module scales count columns to thousands, so an L50 of 8 printed
+<code>0.0 K</code>. The overlay now sets <code>quast_config.total_number_contigs_multiplier: 1</code>.</p></div></details>
+
+<details><summary>MEMOTE total is 68.1 % — is the model 68 % correct?</summary><div class="body">
+<p>No. It is a weighted score over 12 consistency and annotation tests, not a fraction of anything
+physical. The biomass/growth/medium tests carry weight 0 in MEMOTE 0.17.0, so they cannot move it —
+which is exactly why step 9 exists.</p></div></details>
+
+<details><summary>The table says 2486 reactions, the embedded MEMOTE report says 2496. Which is wrong?</summary><div class="body">
+<p>Neither. COBRApy creates 10 exchange reactions on load for metabolites that have none in the
+file (<code>na1</code>, <code>ni2</code>, <code>cd2</code>, <code>cm</code>, <code>hg2</code>,
+<code>fusa</code>, <code>gbbtn</code>, <code>novbcn</code>, <code>doxrbcn</code>,
+<code>ttrcyc</code>). The SBML has 2486; MEMOTE sees 2496. Quote which one you mean.</p></div></details>
+
+<details><summary>BUSCO says 100 % complete, but genome fraction is 97.4 %. Contradiction?</summary><div class="body">
+<p>No. BUSCO asks "are the 440 conserved genes present?"; genome fraction asks "how much of the
+reference sequence did I recover?". A complete gene set can sit on an assembly that is missing
+accessory regions — which is the O157:H7 case.</p></div></details>
+
+<details><summary>440/440 complete yet 2 duplicated — is the sample contaminated?</summary><div class="body">
+<p><code>D = 2</code> means two markers occur more than once; the complete count still includes
+them. Two is within normal short-read variation. More than ~5 % would be worth investigating.</p></div></details>
+
+<details><summary>Only 30.5 % of the K-12 contigs align — is the assembly bad?</summary><div class="body">
+<p>No, and this is the most misread number in the report. Those 113 aligned contigs carry 94.45 %
+of the assembly's bases; the remaining ~257 are tiny fragments, often below the 65 bp alignment
+threshold. Read <code>Genome fraction</code> for completeness.</p></div></details>
+
+<details><summary><code>Duplicates (%)</code> 12–15 % — is that high?</summary><div class="body">
+<p>Normal for short-read libraries, and it inflates apparent coverage only slightly. Compare raw
+with trimmed: trimming does not change it, which is expected (duplicates are mostly PCR artefacts,
+not adapters).</p></div></details>
+
+<details><summary><code>Modules failed (%)</code> 10–20 % — did 20 % of the reads fail?</summary><div class="body">
+<p>No: it is the share of FastQC <i>modules</i> that failed for that file. It drops to 0 % after
+trimming, which is the useful signal.</p></div></details>
+
+<details><summary>Assembly 5.40 Mbp vs reference 5.59 Mbp, yet genome fraction 97.4 % — consistent?</summary><div class="body">
+<p>Yes: 97.4 % of 5.59 Mbp ≈ 5.45 Mbp of the reference is covered. The assembly is shorter because
+it lacks ~190 kbp of accessory sequence present in Sakai (and carries a little of its own).
+Coverage of a shorter genome is what a different strain looks like.</p></div></details>
+
+<details><summary>Why is the growth check missing from the runtime table?</summary><div class="body">
+<p>It writes no <code>benchmarks/</code> record: that directory is the Snakemake step set, and an
+unknown label would appear as a raw column. Its cost is seconds; the log timestamps are the
+record. The same applies to the reference comparison.</p></div></details>
+
+<details><summary>Why do the numbers contain spaces, e.g. <code>2 486</code>?</summary><div class="body">
+<p>MultiQC's thousand separator: 2486. (The report normaliser deliberately leaves numeric
+separators alone.)</p></div></details>
+
+<details><summary><code>Annotation · genes</code> is 33.3 % for both models — a red flag?</summary><div class="body">
+<p>A property of CarveMe drafts, not of the data: gene-associated annotations and SBO terms are
+sparse in reconstructed models, and identical across isolates because both came through the same
+reconstruction path.</p></div></details>
+
+<h4>Provenance</h4>
+<details><summary>Which medium, and where did its composition come from?</summary><div class="body">
+<p><code>media/m9_aerobic.yaml</code>: the 20 compounds are taken verbatim from CarveMe's own
+<code>media_db.tsv</code> row <code>M9</code> (carveme 1.6.6, sha256 recorded in
+<code>docs/asset-sources.md</code>). The uptake <b>rates</b> (glucose 10, O₂ 20, the rest 1000
+mmol·gDW⁻¹·h⁻¹) are a documented project convention, not measurements. The growth rate depends on
+them — 0.476 / 0.953 / 1.283 / 28.772 h⁻¹ for a glucose bound of 5 / 10 / 20 / unlimited — while
+the yield (0.529 g/g) does not, which is why plausibility is argued from the yield.</p></div></details>
+
+<details><summary>Which reference genomes, and how are they pinned?</summary><div class="body">
+<p><code>GCA_000005845.2</code> (<i>E. coli</i> K-12 MG1655, 4,641,652 bp, one sequence) and
+<code>GCA_000008865.2</code> (<i>E. coli</i> O157:H7 Sakai, 5,594,605 bp, chromosome + pOSAK1 +
+pO157), fetched from NCBI Datasets. Accession, length and md5 are recorded in
+<code>docs/asset-sources.md</code>; the FASTAs are git-ignored.</p></div></details>
+
+<h2 id="evidence">9 · Evidence that it is faithful and plausible</h2>
+<h4>Port fidelity — byte comparison against the Snakemake original</h4>
+<table>
+<thead><tr><th>output</th><th>result</th></tr></thead>
+<tbody>
+<tr><td>Trimmomatic trimmed reads (8 files)</td><td><span class="ok">cmp identical</span></td></tr>
+<tr><td>SPAdes <code>contigs.fasta</code> (2)</td><td><span class="ok">cmp identical</span></td></tr>
+<tr><td>QUAST <code>report.tsv</code> (2)</td><td><span class="ok">cmp identical</span></td></tr>
+<tr><td>Bakta annotation tables</td><td>identical line counts (4891 / 5496)</td></tr>
+<tr><td>CarveMe diamond tables</td><td>identical line counts (8961 / 9306)</td></tr>
+<tr><td>BUSCO summaries</td><td>identical scores; only paths differ</td></tr>
+</tbody></table>
+
+<h4>Biology</h4>
+<table>
+<thead><tr><th>signal</th><th>K-12</th><th>O157:H7</th><th>healthy</th></tr></thead>
+<tbody>
+<tr><td>BUSCO complete</td><td>440/440 (438 S, 2 D)</td><td>440/440 (438 S, 2 D)</td><td>≥ 95 %</td></tr>
+<tr><td>assembly length</td><td>4.84 Mbp, 370 contigs, N50 159.3 kbp</td><td>5.40 Mbp, 390 contigs, N50 244.8 kbp</td><td>compare with expected</td></tr>
+<tr><td>genome fraction</td><td>99.38 %</td><td>97.37 %</td><td>≥ 95 %</td></tr>
+<tr><td>identity</td><td>99.926 %</td><td>99.721 %</td><td>≥ 99 %</td></tr>
+<tr><td>mismatches / 100 kbp</td><td>67.59</td><td>260.56</td><td>&lt; 500</td></tr>
+<tr><td>model size (rxn/met/gene)</td><td>2486 / 1551 / 1623</td><td>2478 / 1538 / 1609</td><td>compare with a published model</td></tr>
+<tr><td>growth on M9</td><td>0.953 h⁻¹</td><td>0.953 h⁻¹</td><td>0.4–1.5</td></tr>
+<tr><td>yield</td><td>0.529 g/g</td><td>0.529 g/g</td><td>0.3–0.7 (~0.5 measured)</td></tr>
+<tr><td>no carbon / anaerobic</td><td>0.000 / 0.228</td><td>0.000 / 0.228</td><td>0 / lower</td></tr>
+<tr><td>MEMOTE total</td><td>68.1</td><td>67.8</td><td>60–75 for a draft</td></tr>
+</tbody></table>
+
+<h4>Resources actually used (from the report's versions table)</h4>
+<table>
+<thead><tr><th>group</th><th>software</th><th>version</th><th>used by</th></tr></thead>
+<tbody>
+<tr><td>FastQC</td><td>FastQC</td><td>0.12.1</td><td>steps 1, 3</td></tr>
+<tr><td>Trimmomatic</td><td>trimmomatic / openjdk</td><td>0.39 / 17</td><td>step 2</td></tr>
+<tr><td>SPAdes</td><td>spades</td><td>4.0.0</td><td>step 4</td></tr>
+<tr><td>QUAST</td><td>quast</td><td>5.2.0</td><td>step 5</td></tr>
+<tr><td>BLAST</td><td>blast</td><td>2.17.0</td><td>step 5b</td></tr>
+<tr><td>BUSCO</td><td>BUSCO</td><td>5.8.3</td><td>step 6</td></tr>
+<tr><td>Bakta</td><td>bakta / pyhmmer</td><td>1.11.4 / 0.10.15</td><td>step 7</td></tr>
+<tr><td>CarveMe</td><td>carveme / diamond / pyscipopt / scip</td><td>1.6.6 / 2.2.8 / 5.7.1 / 9.2.4</td><td>step 8</td></tr>
+<tr><td>Growth check</td><td>cobrapy / glpk</td><td>0.32.1 / 5.0</td><td>steps 9, 10</td></tr>
+<tr><td>MEMOTE</td><td>memote</td><td>0.17.0</td><td>step 10</td></tr>
+<tr><td>MultiQC</td><td>multiqc</td><td>1.21</td><td>step 11</td></tr>
+<tr><td>Nextflow</td><td>nextflow</td><td>26.10.0</td><td>engine (injected at run time)</td></tr>
+<tr><td>NextFlow-WGS2GEM</td><td>pipeline</td><td>0.1.0</td><td>—</td></tr>
+</tbody></table>
+<p class="small">Reference data: Bakta light DB 6.0 (2025-02-24, doi 10.5281/zenodo.14916843),
+BUSCO <code>enterobacterales_odb10</code> (440 markers), CarveMe <code>media_db.tsv</code>
+(sha256 in <code>docs/asset-sources.md</code>), two NCBI genomes (accession + md5 there too).</p>
+
+<h2 id="gates">10 · Quality gates</h2>
+<p>Seven tool-free checks and four CI jobs. CI runs the same scripts a developer runs, so the two
+cannot drift apart.</p>
+<table>
+<thead><tr><th>check</th><th>what it protects</th></tr></thead>
+<tbody>
+<tr><td><code>run-lint.sh</code></td><td><code>nextflow lint</code>: zero errors, and a warning count that cannot grow past a pinned baseline</td></tr>
+<tr><td><code>run-preview.sh</code></td><td>compilation plus seven malformed sample sheets, each aborting before a single task</td></tr>
+<tr><td><code>run-disk-guard.sh</code></td><td>the disk pre-flight: passes, aborts before any task, and is disabled by 0</td></tr>
+<tr><td><code>run-stub-smoke.sh</code></td><td>the whole DAG (25 tasks in the CI fixture) runs with stubs, publishes the documented tree, asserts the growth-check-before-MEMOTE edge, and never touches the validated output tree</td></tr>
+<tr><td><code>run-failure-isolation.sh</code></td><td>an injected failing sample: exit 1, no partial deliverables, finished work survives, <code>-resume</code> converges</td></tr>
+<tr><td><code>run-embed-check.sh</code></td><td>the report embedders and the header normaliser actually run: section headers, one-file vs per-sample, byte-identical <code>srcdoc</code> round-trip, no CSS/JS leakage, header renaming, unit stripping, idempotence</td></tr>
+<tr><td><code>run-growth-check.sh</code></td><td>the medium and its checker, with three negative controls that must each fail: unmappable component, impossible window, physical-bound violation</td></tr>
+</tbody></table>
+<p class="small">The guards are mutation-tested: each was shown to fail when the thing it protects
+is broken. One of them was caught doing exactly that in CI — a failure-injection test had been
+passing through an empty path because it killed only one of two parallel entry points.</p>
+
+<h2 id="limits">11 · Limits and open items</h2>
+<table>
+<thead><tr><th>item</th><th>status</th></tr></thead>
+<tbody>
+<tr><td>QUAST's own reference mode</td><td><b>cannot run here</b>: bundled minimap2 fails to compile on arm64 macOS. Replaced by step 5b.</td></tr>
+<tr><td>The SBML omits 10 exchange reactions</td><td>COBRApy creates them on load. A downstream tool that does not would report missing medium components (<code>na1</code>, <code>ni2</code> are in M9). Documented, not patched.</td></tr>
+<tr><td>Growth window</td><td>reported, not fatal: the 0.4–1.5 window is <i>E. coli</i>-specific and the pipeline accepts other organisms. An unmappable medium stays fatal (exit 2).</td></tr>
+<tr><td>Growth rate vs medium</td><td>the rate is conditional on the uptake bounds (a convention); the yield is the robust number. Both are asserted; the sensitivity table is in the medium file and in the interpretation guide.</td></tr>
+<tr><td>MEMOTE 0.17.0 bugs</td><td>the fast-growth test asserts with inverted polarity, and <code>test_find_medium_metabolites</code> crashes; the pipeline asserts the physical bound itself and keeps the original invocation.</td></tr>
+<tr><td>Execution backends</td><td>conda only — no Docker/Singularity profiles, no HPC executor yet.</td></tr>
+<tr><td>BUSCO lineage</td><td>a parameter, fixed to <code>enterobacterales_odb10</code>; it also decides the filenames the report looks for.</td></tr>
+<tr><td>Paired-end only</td><td>single-end reads are not supported.</td></tr>
+</tbody></table>
+
+<h2 id="run">12 · Running it</h2>
+<pre><span class="c"># one cohort, no reference comparison</span>
+nextflow run . \
+    --raw_dir   /path/to/fastq \
+    --bakta_db  /path/to/bakta/db-light \
+    --busco_db  /path/to/busco/db
+
+<span class="c"># with the optional assembly-vs-reference comparison</span>
+nextflow run . --samples_tsv samples.with_reference.tsv
+
+<span class="c"># operational switches</span>
+-resume                     reuse finished tasks
+-profile lowmem             halve SPAdes/Trimmomatic threads (two samples assemble concurrently)
+--min_free_disk_gb=0        skip the disk pre-flight (it needs 20 GiB by default)
+--report_tag run2           a second report that coexists with the first
+</pre>
+
+<h4>Requirements</h4>
+<ul>
+  <li>Nextflow ≥ 25.10 (developed and validated on 26.10.0)</li>
+  <li>conda or mamba on PATH — 8 environments are built automatically on the first run</li>
+  <li>Java 17+ (inside the Trimmomatic environment)</li>
+  <li>≥ 20 GiB free disk, enforced before any task starts</li>
+  <li>Bakta database and a BUSCO lineage cache, by parameter; NCBI references optional</li>
+</ul>
+
+<h4>Failure behaviour</h4>
+<p><code>errorStrategy = 'finish'</code>: a failing task always fails the run (non-zero exit), the
+failed sample leaves no downstream deliverables, the healthy sample's finished work survives, and
+<code>-resume</code> converges while reusing it. A missing sample-sheet column, a missing FASTQ,
+a missing reference or a full disk all abort <em>before</em> the first task.</p>
+
+<footer>
+  NextFlow-WGS2GEM v0.1.0 · generated by hand as a single self-contained page (no external
+  assets, prints cleanly) · the authoritative detail lives in
+  <code>docs/nextflow-port-design.md</code> (findings F1–F37, decisions D1–D24),
+  <code>docs/interpretation.md</code> (field guide + 20 questions) and
+  <code>docs/asset-sources.md</code> (provenance).
+</footer>
+
+</main>
+</body>
+</html>
