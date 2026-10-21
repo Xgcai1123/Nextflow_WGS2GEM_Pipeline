@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`docs/interpretation.md` — a reader's guide to the numbers.** Metric by metric: what it
+  means, when it indicates a problem, and what it does not license you to conclude. Includes the
+  three traps that look right and are not (the 66 h⁻¹ complete-medium artefact, the growth rate's
+  dependence on the chosen uptake bounds, and a low genome fraction caused by a different strain),
+  a troubleshooting table, a parameter-sensitivity table, and a section-by-section navigation of
+  the report.
+- **Data-asset fingerprints.** `docs/asset-sources.md` now also records the assets that are
+  fetched rather than copied: CarveMe's `media_db.tsv` (carveme 1.6.6, sha256), and both NCBI
+  references (accession, md5, length, sequence count) — including the honest note that CarveMe
+  does not document where its medium database came from, so that layer remains unverified.
+- **Optional assembly-vs-reference comparison (step 5b, `ASSEMBLY_REF`).** A `reference` column
+  in the sample sheet names a public genome (resolved against `ref_dir`); that sample's assembly
+  is aligned to it with BLASTN and the result becomes a report section — genome fraction,
+  identity, mismatch and indel rates, share of assembly and of contigs that align. Thresholds
+  are QUAST's defaults (>= 95 % identity, >= 65 bp), so the numbers are comparable with a
+  standard QUAST/dnadiff run, and BLAST+ comes from the pinned Bakta environment, so no new
+  environment is introduced. A reference that matches nothing fails the task (exit 2) instead of
+  publishing a table of zeroes. Measured on the two validation isolates: 99.38 % of MG1655
+  recovered for K-12 at 99.926 % identity, 97.37 % of Sakai for O157:H7 at 99.721 % — the latter
+  read as a different strain of the same serotype, not as a broken assembly. QUAST's own `-r`
+  was rejected: on arm64 macOS its bundled minimap2 does not compile and QUAST then *silently*
+  falls back to reference-independent statistics (F30/D20).
 - **The growth result is a pipeline step and a MultiQC section** (`GROWTH_CHECK`, `models/growth/`,
   F26/D17). Until now the defined-medium check only ran when invoked by hand, so the report said
   nothing about whether a model grows — the artefacts landed next to a MEMOTE score that does not
@@ -150,6 +172,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The growth check also asserts the biomass yield, not just the growth rate.** The rate moves
+  with the medium's uptake bounds — measured: 0.476 / 0.953 / 1.283 / 28.772 h⁻¹ for a glucose
+  bound of 5 / 10 / 20 / unlimited — so a rate alone cannot support a claim about the model. The
+  yield is the model's biomass stoichiometry and barely moves; it is now computed
+  ((1000·μ / v_carbon) / M_carbon, with the molar mass declared in the medium file) and asserted
+  within 0.30–0.70 g/g. Measured: 0.529 g/g, against ~0.5 g/g for *E. coli* on glucose minimal
+  medium. It also appears as a column in the report (F31/D21).
 - **The growth check now runs before MEMOTE, and the order is enforced rather than implied.**
   The growth check costs ~6 s and answers whether the model is viable at all; MEMOTE costs
   ~250 s per sample and scores something narrower, so the cheap fundamental check runs first

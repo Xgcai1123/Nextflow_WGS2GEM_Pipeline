@@ -222,9 +222,19 @@ if "quast_full" in orders:
     emit(orders.get("quast", 0) > orders["quast_full"] > orders.get("busco", 0),
          "quast_full sorts between quast (%s) and busco (%s), i.e. in pipeline order"
          % (orders.get("quast"), orders.get("busco")))
-    between = [k for k, v in orders.items()
-               if orders.get("busco", 0) < v < orders.get("quast", 0)]
-    emit(between == ["quast_full"], "nothing else is squeezed between them (%s)" % between)
+    between = sorted([k for k, v in orders.items()
+                      if orders.get("busco", 0) < v < orders.get("quast", 0)],
+                     key=lambda k: -orders[k])
+    # F30 added the reference-comparison table. It belongs with the summaries,
+    # i.e. after the QUAST table and before the embedded QUAST page, so the
+    # expected gap content is exactly these two anchors in this order -- anything
+    # else there is a wiring mistake, not a preference.
+    emit(between == ["assembly_ref", "quast_full"],
+         "the gap holds exactly the reference table then the embedded QUAST page, in that order (%s)"
+         % between)
+    if "assembly_ref" in orders:
+        emit(orders["quast"] > orders["assembly_ref"] > orders["quast_full"],
+             "reference comparison sorts after the QUAST table and before the embedded page")
 
 for line in out:
     print(line)

@@ -37,6 +37,19 @@
 #   These are community-conventional FBA bounds of the right order of magnitude;
 #   they are NOT measured for these strains. Tightening them requires either a
 #   chemostat/BIOLOG measurement or a published medium formulation.
+#
+#   HOW MUCH THE ANSWER DEPENDS ON THAT CHOICE (measured, SRR1770413):
+#
+#       glucose bound   O2 bound   predicted growth
+#            5            20         0.476 1/h
+#           10            20         0.953 1/h   <- the convention used here
+#           10          1000         0.953 1/h   (oxygen is not limiting)
+#           20            20         1.283 1/h
+#         1000          1000        28.772 1/h   (carbon no longer limits)
+#
+#   So the growth rate is a property of the medium, not of the model alone. The
+#   YIELD (0.529 g/g here) is what survives that choice, and docs/interpretation.md
+#   explains why plausibility is argued from the yield.
 #   Every component NOT listed here is CLOSED (uptake 0) by the checker.
 #
 # UNITS: mmol / gDW / h   (uptake capacity; the model's lower bound becomes -value)
@@ -56,6 +69,10 @@ provenance:
 units: mmol/gDW/h
 
 carbon_source: glc__D
+# Molar mass of the carbon source, used to turn the flux-based yield (gDW per mol
+# substrate) into a mass yield (gDW per g substrate) so it can be compared with
+# measured values. D-glucose = 180.156 g/mol.
+carbon_source_mw: 180.156
 
 components:
   # --- carbon and energy -----------------------------------------------------
@@ -111,3 +128,11 @@ checks:
   # This is the bound MEMOTE's `test_fast_growth_default` intends but asserts
   # with inverted polarity in 0.17.0, which is why we assert it ourselves.
   max_absolute_growth: 2.81
+
+  # Biomass yield, gDW per g of carbon source. This is the ROBUST number: it is
+  # the model's biomass stoichiometry, so it barely moves when the uptake bounds
+  # move, while the growth RATE moves a lot (see the table above). Measured for
+  # E. coli on glucose minimal medium: about 0.5 g/g, which is why the window is
+  # centred there and why the plausibility argument rests on this, not on mu.
+  min_yield_g_per_g: 0.30
+  max_yield_g_per_g: 0.70

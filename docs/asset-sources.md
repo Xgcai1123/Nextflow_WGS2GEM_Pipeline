@@ -32,3 +32,17 @@
 - `scripts/__pycache__` 未复制（运行时产物，非资产）。
 - `raw/`、`db/` 不复制，默认以 `nextflow.config` 的 `params.raw_dir` / `params.bakta_db` / `params.busco_db` 指回源仓库（开放问题 #2）。
 - 上游改动 → 重新复制对应文件、更新本表 commit 与校验和。
+
+## 外部数据资产（不复制进仓库，按需获取）
+
+上面是**复制进仓库**的代码/配置资产。下面这些是**按需获取、不提交**的数据，凡是管线行为依赖它们的，都在这里记录可核对的指纹（F30/D20 的做法：路径 + 版本/登录号 + 校验和）。
+
+| 资产 | 用途 | 指纹 | 获取方式 |
+|---|---|---|---|
+| `carveme/data/input/media_db.tsv` | `media/m9_aerobic.yaml` 的 20 个化合物取自该库的 `medium == M9` 行 | carveme **1.6.6**（包内文件）<br>sha256 `fab9ebde307ec626473fa8f546d22227b28f32289ecd4e26ea79d8cf086b78a2` | 随 `envs/carveme.yaml` 建环境时自动就位 |
+| `GCA_000005845.2` | 参照 1：*E. coli* K-12 substr. **MG1655**，complete genome | 4,641,652 bp，1 条（`U00096.3`）<br>md5 `b62abb256585725bb26065df188f355b` | NCBI Datasets：`/genome/accession/GCA_000005845.2/download?include_annotation_type=GENOME_FASTA` |
+| `GCA_000008865.2` | 参照 2：*E. coli* **O157:H7 str. Sakai**，complete genome | 5,594,605 bp，3 条（染色体 `BA000007.3` + pOSAK1 + pO157）<br>md5 `1fd428ef2643c351c25ade264d5531ec` | 同上，换登录号 |
+
+参照基因组落在 `db/reference/`（`/db/` 已在 `.gitignore` 中），下载命令见 README 的 *Assembly validation* 一节。
+
+**已知的未知**：CarveMe 包里**没有**关于 `media_db.tsv` 出处（它是从哪些文献/模型收集来的）的任何说明或引用。因此"CarveMe 的 M9 行本身从哪来"这一层未被本项目核实；本项目能追溯的是"这 20 个化合物确实来自 carveme 1.6.6 的该文件，且其 sha256 如上"。若要对外声明更上游的可引用性，需要另行查证上游源码仓库。

@@ -37,8 +37,10 @@ expect_eq "stub run exits 0" "0" "${status}"
 submitted=$(grep -c 'Submitted process' "${log}" || true)
 # 2 samples x (FastQC raw 1/2, Trimmomatic, FastQC trimmed 1/2, SPAdes, QUAST,
 # BUSCO, Bakta, CarveMe, MEMOTE) = 22, + GROWTH_CHECK (one aggregate task, F26)
-# + MULTIQC = 24.
-expect_eq "task count (2 samples x 11 steps + growth check + MultiQC)" "24" "${submitted}"
+# + MULTIQC = 24, + ASSEMBLY_REF for the ONE sample whose fixture row names a
+# reference (F30; CI_B has none on purpose, so the mixed cohort is exercised)
+# = 25.
+expect_eq "task count (2 samples x 11 steps + growth check + MultiQC + 1 ref compare)" "25" "${submitted}"
 
 # F29: the growth check must be ORDERED before MEMOTE. Declaration order in
 # main.nf does not achieve that (both branches depend only on CARVEME), so the
@@ -97,6 +99,17 @@ done
 for f in growth_mqc.tsv growth.tsv; do
     expect_file "growth ${f}" "${CI_OUT}/models/growth/${f}"
 done
+# F30: only CI_A names a reference, so only CI_A publishes a comparison. The
+# absence for CI_B is an assertion too -- a cohort without references must not
+# grow an empty section or a task of zeros.
+for f in CI_A_refcomp.tsv CI_A_assembly_ref_mqc.tsv; do
+    expect_file "refcompare ${f}" "${CI_OUT}/data/qc/refcompare/CI_A/${f}"
+done
+if [ -e "${CI_OUT}/data/qc/refcompare/CI_B" ]; then
+    fail "CI_B has no reference in the fixture but a refcompare directory was published"
+else
+    pass "refcompare: no task and no directory for the sample without a reference"
+fi
 expect_file "aggregate report" "${CI_OUT}/reports/multiqc/multiqc_report.html"
 
 echo "== validated output tree untouched (F18 guard) =="

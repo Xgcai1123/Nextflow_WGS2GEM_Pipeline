@@ -58,7 +58,7 @@ COMPLETE_UPTAKE = 1000.0
 # Columns of the emitted tables, in report order. `growth_complete` sits next to
 # `growth_M9` on purpose: the contrast between them IS the finding.
 MQC_COLUMNS = ["growth_M9", "growth_complete", "growth_no_carbon",
-               "growth_anaerobic", "failed_checks"]
+               "growth_anaerobic", "yield_g_per_g", "failed_checks"]
 
 # MultiQC custom-content section, self-described in the file header.
 #
@@ -96,6 +96,11 @@ MQC_HEADER = '''\
 #   growth_anaerobic:
 #     title: "Anaerobic (1/h)"
 #     description: "Must be below the aerobic value. E. coli ferments glucose, so zero is not expected."
+#     min: 0
+#     format: "{:,.3f}"
+#   yield_g_per_g:
+#     title: "Yield (gDW/g)"
+#     description: "Biomass yield per gram of the carbon source, from the flux solution. Unlike the growth rate this barely depends on the chosen uptake bound, so it is the number to quote when comparing with measured yields (about 0.5 g/g for E. coli on glucose)."
 #     min: 0
 #     format: "{:,.3f}"
 #   failed_checks:
@@ -187,11 +192,22 @@ def evaluate(model_path: str, cfg: dict, uptake: Dict[str, float]) -> dict:
         anaerobic.pop(exchange_id(compound), None)
     result["growth_anaerobic"] = growth_on(model, anaerobic)
 
+    # F31: biomass yield = mu / (carbon uptake). Converted to gDW per g of
+    # substrate with the molar mass declared in the medium file. Unlike the growth
+    # rate this barely moves when the uptake-bound convention changes, so it is the
+    # number that can be compared with a measured yield (~0.5 g/g for E. coli on
+    # glucose minimal medium).
+    carbon = cfg.get("carbon_source")
+    v_carbon = uptake.get(exchange_id(carbon), 0.0) if carbon else 0.0
+    mw = float(cfg.get("carbon_source_mw") or 0.0)
+    if v_carbon > 0 and mw > 0:
+        result["yield_g_per_g"] = (1000.0 * result["growth_m9"] / v_carbon) / mw
+
     tol = max(model.tolerance * 10, 1e-6)
     bounds = cfg["checks"]
     g, gc, ga = (result["growth_m9"], result["growth_no_carbon"],
                  result["growth_anaerobic"])
-    result["checks"] = [
+    checks = [
         ("every medium component maps to an exchange reaction", True,
          "%d/%d" % (len(uptake), len(uptake))),
         ("growth on %s within [%s, %s]" % (result["medium"], bounds["min_growth"],
@@ -204,6 +220,13 @@ def evaluate(model_path: str, cfg: dict, uptake: Dict[str, float]) -> dict:
         ("anaerobic growth is lower than aerobic", ga < g,
          "%.3f < %.3f 1/h" % (ga, g)),
     ]
+    if "yield_g_per_g" in result:
+        lo, hi = bounds.get("min_yield_g_per_g"), bounds.get("max_yield_g_per_g")
+        y = result["yield_g_per_g"]
+        checks.append(
+            ("biomass yield on %s within [%s, %s] g/g" % (carbon, lo, hi),
+             lo is None or hi is None or lo <= y <= hi, "%.3f g/g" % y))
+    result["checks"] = checks
     return result
 
 
@@ -242,6 +265,7 @@ def table_rows(results: List[dict]) -> List[List[str]]:
             "%.3f" % r["growth_complete"] if "growth_complete" in r else "",
             "%.3f" % r["growth_no_carbon"] if "growth_no_carbon" in r else "",
             "%.3f" % r["growth_anaerobic"] if "growth_anaerobic" in r else "",
+            "%.3f" % r["yield_g_per_g"] if "yield_g_per_g" in r else "",
             "%d" % sum(1 for _l, ok, _d in r["checks"] if not ok),
         ])
     return rows

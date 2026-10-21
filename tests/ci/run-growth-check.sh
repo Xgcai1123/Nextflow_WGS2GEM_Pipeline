@@ -129,6 +129,11 @@ expect_grep "all 20 medium components map" "20/20" "${WORK}/ok.log"
 expect_grep "growth is the constructed 1.0 /h" "1.000 1/h" "${WORK}/ok.log"
 expect_grep "no growth without a carbon source" "no growth without a carbon source" "${WORK}/ok.log"
 expect_grep "anaerobic growth is lower" "anaerobic growth is lower" "${WORK}/ok.log"
+# F31: the yield is asserted too, because it is the convention-ROBUST number --
+# the growth rate moves with the uptake bounds, the yield does not, so it is the
+# one that can be compared with a measured yield.
+expect_grep "biomass yield is asserted" "biomass yield on" "${WORK}/ok.log"
+expect_grep "the committed yield window is applied" "within [0.3, 0.7] g/g" "${WORK}/ok.log"
 expect_nogrep "no failing check" "FAIL" "${WORK}/ok.log"
 
 # ---------------------------------------------------------------

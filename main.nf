@@ -156,6 +156,12 @@ process QUAST {
     bench_start
     mkdir -p ${params.logs_dir}/quast
     mkdir -p out
+    # NOTE (F30): QUAST's own reference mode (-r) is deliberately NOT used. It has
+    # no hook for an external aligner: it compiles a bundled minimap2 on first
+    # use, and on arm64 macOS that compile fails on '-msse2'/'-mfpu='. QUAST then
+    # WARNS and quietly reports reference-independent statistics, i.e. a reference
+    # comparison that silently is not one. The comparison lives in ASSEMBLY_REF
+    # instead, so this task's output stays byte-identical to the original pipeline.
     # PITFALL (kept): --labels is mandatory -- input is always contigs.fasta,
     # without it every sample is called "contigs" in QUAST/MultiQC.
     # PITFALL (kept): pip quast 5.2.0 only ships the quast.py entry point
@@ -171,6 +177,49 @@ process QUAST {
     """
     mkdir -p out
     touch out/report.html out/report.txt out/report.tsv
+    """
+}
+
+// step 5b -- F30: is the assembly the organism it claims to be? Aligns it against
+// a public reference genome named in the sample sheet. BLAST+ ships inside the
+// pinned Bakta environment, so this introduces no new environment (D4).
+// No bench_start/bench_finish: benchmarks/ carries the Snakemake step set and an
+// unknown label would surface as a raw column in the report (cf. GROWTH_CHECK).
+process ASSEMBLY_REF {
+    tag "${sample}"
+    conda "${params.envs_dir}/bakta.yaml"
+    cpus 2
+    publishDir(path: { "${params.refcomp_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
+               saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
+
+    input:
+    tuple val(sample), path(contigs), path(reference)
+
+    output:
+    tuple val(sample), path("out/${sample}_refcomp.tsv"), path("out/${sample}_assembly_ref_mqc.tsv")
+
+    script:
+    """
+    mkdir -p ${params.logs_dir}/refcompare out
+    # The script exits 2 when no alignment passes the thresholds. That is the
+    # point: a wrong reference must fail loudly instead of publishing a table of
+    # zeroes that looks like a result.
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/compare_assembly_ref.py \\
+        --contigs ${contigs} \\
+        --reference ${reference} \\
+        --sample ${sample} \\
+        --outdir out \\
+        --threads ${task.cpus} \\
+        --blastn "\${CONDA_PREFIX}/bin/blastn" \\
+        --mqc-out out/${sample}_assembly_ref_mqc.tsv \\
+        --tsv-out out/${sample}_refcomp.tsv \\
+        > ${params.logs_dir}/refcompare/${sample}.log 2>&1
+    """
+
+    stub:
+    """
+    mkdir -p out
+    touch out/${sample}_refcomp.tsv out/${sample}_assembly_ref_mqc.tsv
     """
 }
 
@@ -452,6 +501,15 @@ process MULTIQC {
         --report-dir ${params.multiqc_dir} \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
+    # ---- 2d. 参照比对表（F30）：逐样本 *_mqc.tsv 同 id 会被 MultiQC 合并成一张表
+    #          （已实测：两个文件 2 行都出现）。这里按样本表逐个 cp，不 glob 目录。----
+    rm -rf ref_section
+    mkdir -p ref_section
+    for s in ${samples.join(' ')}; do
+        f="${params.refcomp_dir}/\$s/\${s}_assembly_ref_mqc.tsv"
+        if [ -f "\$f" ]; then cp "\$f" ref_section/; fi
+    done
+
     # ---- 2c. QUAST 自身输出文件内嵌段（report.html 完整交互报告 + report.txt 纯文本；
     #          report.html 是自带 Bootstrap CSS/22 段 JS 的完整页面，同样包成独立 iframe；
     #          全队列只出一个 *_mqc.html —— report_section_order 的锚点是精确匹配、
@@ -474,7 +532,9 @@ process MULTIQC {
     done
 
     # -c twice: the reused config first, the presentation overlay second.
-    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html ${growth_section} \\
+    # ref_section may be empty (no references in this cohort) -- MultiQC accepts a
+    # directory with no *_mqc.* files, so the section simply does not appear.
+    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html ref_section ${growth_section} \\
         -c ${multiqc_config} \\
         -c ${multiqc_config_extra} \\
         -o . -f -n ${report_name} \\
@@ -508,6 +568,7 @@ workflow {
             'model (CarveMe)'    : params.carveme_dir,
             'model (MEMOTE)'     : params.memote_dir,
             'growth check (F26)' : params.growth_dir,
+            'ref comparison (F30)': params.refcomp_dir,
             'reports (MultiQC)'  : params.multiqc_dir,
         ]
         def volumes = [:]            // filesystem -> [anchor path, usable bytes, total bytes]
@@ -570,6 +631,7 @@ workflow {
     if (missing) { error "samples.tsv: missing required column(s): ${missing}; found: ${header}" }
 
     def SAMPLES     = [:]                 // LinkedHashMap: name -> [fq1, fq2, meta...]
+    def REFERENCE   = [:]                 // F30: name -> absolute reference FASTA path (optional)
     def META_COLS   = header - REQUIRED
     def name_re     = ~/[A-Za-z0-9._-]+/  // sample name becomes a path component
     def resolve     = { fq, row ->        // hoisted (F9: typed/inner closures unsupported)
@@ -593,6 +655,25 @@ workflow {
         }
         if (SAMPLES.containsKey(name)) { error "samples.tsv: duplicate sample name ${name}" }
         SAMPLES[name] = [resolve.call(rec.fq1, idx + 2), resolve.call(rec.fq2, idx + 2)] + META_COLS.collect { rec[it] }
+
+        // F30: OPTIONAL `reference` column -- an NCBI (or any) FASTA for this
+        // sample. Empty means "no reference", which keeps QUAST's output
+        // byte-identical to the original pipeline. A non-empty value must exist:
+        // silently skipping a reference would quietly downgrade the assembly
+        // evaluation, which is exactly the kind of silent loss this project
+        // refuses to allow.
+        if (header.contains('reference')) {
+            def ref = (rec.reference ?: '').toString().trim()
+            if (ref) {
+                def ref_path = ref.startsWith('/') ? ref : "${params.ref_dir}/${ref}"
+                if (!file(ref_path).exists()) {
+                    error "samples.tsv: row ${idx + 2}: reference not found: ${ref_path}\n" +
+                          "  (see README > Inputs: how to fetch an NCBI reference, or leave the\n" +
+                          "   reference field empty to run without reference-based metrics)"
+                }
+                REFERENCE[name] = ref_path
+            }
+        }
     }
     def SAMPLE_NAMES = SAMPLES.keySet() as List
 
@@ -619,6 +700,15 @@ workflow {
 
     SPADES(TRIMMOMATIC.out.map { n, r1p, r2p, r1u, r2u -> tuple(n, r1p, r2p) })
     QUAST(SPADES.out)
+
+    // ---- step 5b: assembly vs a public reference genome (F30) ---------------
+    // Only samples whose sheet row names a reference run this task; a cohort
+    // without references produces no task and no report section, which is the
+    // honest shape (there is nothing to compare).
+    ref_one = channel.fromList(SAMPLE_NAMES)
+        .filter { n -> REFERENCE.containsKey(n) }
+        .map { n -> tuple(n, file(REFERENCE[n])) }
+    ASSEMBLY_REF(SPADES.out.join(ref_one))
     BUSCO(SPADES.out)
     BAKTA(SPADES.out.map { n, contigs ->
         tuple(n, contigs, file("${params.bakta_db}/version.json"))   // db-upgrade sentinel

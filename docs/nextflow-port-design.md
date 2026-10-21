@@ -1049,6 +1049,34 @@ profiles {
   - **步骤重编号**:8 CarveMe → **9 Growth** → **10 MEMOTE** → 11 MultiQC;README(步骤表、DAG 图、Report/Model validation 段)、本文档、CHANGELOG、`tests/ci/README.md` 全部同步。
   - **实测**:DAG 24 任务;日志顺序 `GROWTH_CHECK (cohort)` → `MEMOTE (CI_B)` → `MEMOTE (CI_A)` → `MULTIQC`;`nextflow lint` 0 error / 34 warning(≤38 棘轮);`run-stub-smoke` 全绿(含新增顺序断言)。
 
+- **F30 用 NCBI 上的良好装配做参照比对,评估管线自己的装配结果（用户与导师反馈 #2，2026-10-15）**：装配"看着合理"(N50/GC/BUSCO)不等于"是它声称的那个生物";采样污染、菌株不符、乃至装配本身出错,都能通过基础统计。给一个公共参照基因组,才能把"看起来对"变成**测出来对**。
+  - **先试最自然的做法,并否决它**:QUAST 本身支持 `-r`。实测 QUAST 5.2.0 在本机(arm64 macOS)**自带 minimap2 第一次运行时编译失败**——`clang: error: unsupported option '-msse2' for target 'arm64-apple-darwin'`(换 `make arm_neon=1` 又撞 `-mfpu=`);QUAST 随后只打一条 WARNING 就**静默退化**成"只算基础统计",`report.tsv` 里只剩 Reference length / Reference GC / NGx,**没有 genome fraction、没有 mismatches**。这正是本项目一贯拒绝的"静默降级",而且 QUAST 没有外部比对器入口(`--help` 里没有 `--minimap2`/`--nucmer` 之类的路径参数)。
+  - **决定**:**放弃 `-r`**,QUAST 保持与原始管线**逐字节一致**(原因也写进了 `main.nf` 的注释);参照比对**独立成步 5b `ASSEMBLY_REF`**,引擎用 **BLASTN**——BLAST+ 就在 pinned 的 Bakta 环境里,**不新增任何环境**(D4 完好)。
+  - **指标与阈值**:阈值取 QUAST 默认(identity ≥ 95 %、比对长度 ≥ 65 bp),使结果与标准 QUAST/dnadiff 可比:
+    - **genome fraction**(参考被覆盖比例,区间**按参考序列分别合并**——染色体与质粒不能混算)
+    - **identity**(按比对长度加权)
+    - **mismatches / indels per 100 kbp**
+    - assembly aligned %、aligned contigs %
+  - **实测(两个真实样本)**:
+    | 样本 | 参照 | genome fraction | identity | mismatches/100 kbp | indels/100 kbp | assembly aligned | aligned contigs |
+    |---|---|---|---|---|---|---|---|
+    | SRR1770413 (K-12) | GCA_000005845.2 MG1655, 4,641,652 bp (`U00096.3`) | **99.38 %** | **99.926 %** | 67.6 | 5.6 | 94.45 % | 30.54 % |
+    | SRR10194530 (O157:H7) | GCA_000008865.2 Sakai, 5,594,605 bp(染色体+pOSAK1+pO157) | **97.37 %** | **99.721 %** | 260.6 | 11.3 | 97.84 % | 96.92 % |
+  - **怎么读这两个数**:K-12 样本恢复 MG1655 的 99.4 %、一致度 99.93 %——这就是"它确实是 K-12 衍生株"的数值形态。O157:H7 样本只恢复 Sakai 的 97.4 %、错配率高约 4 倍,且装配比 Sakai 短约 190 kb——这与"同血清型、**不同菌株**"一致(Sakai 只是该血清型的一个分离株),**不是**装配坏了。另外 aligned contigs 的不对称也很有解释力:K-12 只有 30.5 % 的 contig 承载了 94.5 % 的碱基(三百多个微小 contig),O157:H7 则有 96.9 % 的 contig 能比对。
+  - **工程细节(三条都踩过)**:
+    1. **混合队列**:参照是**逐样本可选**的,只有带参照的行才生成任务。CI fixture 故意 `CI_A` 有、`CI_B` 无,于是任务数 **24 → 25**,并且 smoke 里同时断言"**CI_B 不产生目录**"——没有参照就不该长出一个空章节。
+    2. **多文件同 id 合并**:每样本各写一个 `*_mqc.tsv`(同 `id: assembly_ref`),先**实测** MultiQC 会把它们合并成一张表(2 行都在,`Showing 2 / 2 rows`),因此**不需要**额外聚合脚本;章节里"每样本一行"的形态得以保持。
+    3. **参照不匹配必须响亮失败**:脚本在"没有任何比对过阈值"时 **exit 2**,而不是输出一张全零的表——后者会被当成结果。
+  - **影响面**:新参数 `ref_dir`(默认 `db/reference`,已被 `/db/` 忽略)与 `refcomp_dir`;新可选步骤 5b(不在 11 步主链上,无参照时 DAG 与产物**完全不变**);报告新增 `assembly_ref` 章节(order **870**,紧跟 QUAST 表、在内嵌 QUAST 报告之前);磁盘预检把 `refcomp_dir` 也纳入目标。参照 FASTA 不入库,下载命令写进 README。
+
+- **F31 可解释性:把"这个数怎么读"和"这个数有多依赖我的约定"写进仓库（用户与导师反馈 #3，2026-10-15）**：基础功能达标之后,真正的缺口是**读者能不能正确解释这些数字**。做了五件事:
+  1. **`docs/interpretation.md`**：逐指标"怎么读 / 什么情况该去查",含三个"看起来对其实不对"的陷阱(66 h⁻¹ 完整介质假象、生长率依赖吸收上限、genome fraction 低≠装配坏)、排错表、参数敏感度表、报告章节导航。
+  2. **得率断言(机制改动)**：`check_growth.py` 现在除 μ 之外还计算并断言 **gDW/g 得率** = (1000·μ / v_carbon) / M_carbon,窗口取 `[0.30, 0.70] g/g`,摩尔质量声明在介质文件(`carbon_source_mw: 180.156`)而不是写死在代码里。实测 **0.529 g/g**(对照 *E. coli* 葡萄糖无机盐实测约 0.5 g/g)。MQC 表新增 `yield_g_per_g` 列。
+  3. **敏感度入档**:把实测表写进 `media/m9_aerobic.yaml` 与解读文档——葡萄糖上限 5/10/20/不限量 → **0.476 / 0.953 / 1.283 / 28.772 h⁻¹**。结论:μ 是"介质+约定"的函数,得率是模型化学计量的函数,所以对外讲合理性要讲**得率**。
+  4. **数据资产指纹**:`docs/asset-sources.md` 增补"外部数据资产(不复制、按需获取)"一节——carveme `media_db.tsv` 的 sha256 与版本、两个 NCBI 参照的登录号/md5/长度;并**诚实记录**"CarveMe 包内没有说明 media_db 的上游出处,这一层本项目未核实"。
+  5. **排错表**:症状 → 最可能原因 → 用什么确认 → 怎么修(覆盖 0 生长、谱系选错、参照不符、磁盘、MEMOTE 崩溃、参照路径)。
+  - **为什么得率更值得断言**:它是生物质方程的化学计量,几乎不随吸收上限变化;而 μ 随碳源上限线性变化。断言一个随约定漂移的量,等于把约定伪装成结论。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1153,6 +1181,8 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D17 | 生长验证**入管线**的具体形态：全队列**一个** `GROWTH_CHECK` 任务（与报告"一章节、每样本一行"同形，cf. D15）；章节配置写在 `*_mqc.tsv` 的**文件头**而非覆盖层（否则需要第二个 `sp:`，会替换掉复用配置的 sp 块，F21）；`--report-only` = 窗口越界只报告不失败，介质与模型不匹配仍 exit 2；**不写 benchmark**（会以生名 `growth_check` 出现在耗时表） | 已定（2026-10-15，F26） |
 | D18 | CI 的 CPU 上限写在 `tests/ci/ci.config`（`process.resourceLimits = [cpus: 1]`），**不**削弱 `nextflow.config`：runner 只有 2 核而真实工具声明 4–8，Nextflow 会直接拒绝调度（F28）。用单一上限而非逐 process 的 `withName` 列表，因为后者会随新增 process 静默失效；stub 任务不执行工具，CPU 声明在 CI 里无意义 | 已定（2026-10-15，F28） |
 | D19 | 生长检查排在 MEMOTE **之前**,且用**数据流边强制**(MEMOTE 消费由 GROWTH_CHECK 广播出的 trigger,`combine` 到每样本),不靠声明顺序;报告章节顺序同步为 growth(650) > memote(600)。理由:6 s vs 250 s/样本,生长是更根本的可存活性问题;MEMOTE 的生长测试权重为 0 且极性反了(F25) | 已定(2026-10-15,用户与导师反馈,F29) |
+| D20 | 参照比对**独立成步**(`ASSEMBLY_REF`,BLASTN,Bakta 环境),**不用** QUAST 的 `-r`:后者在 arm64 macOS 上自带 minimap2 编译失败并**静默降级**成无参照统计(且无外部比对器入口)。阈值取 QUAST 默认(≥95 % identity、≥65 bp)以便与标准 dnadiff 可比;参照不匹配时 **exit 2**;QUAST 输出保持逐字节一致 | 已定(2026-10-15,用户与导师反馈 #2,F30) |
+| D21 | 生长检查**同时断言得率**(gDW/g,窗口 0.30–0.70),不只断言 μ：μ 强依赖介质的吸收上限这一约定,得率不依赖(它是生物质化学计量);摩尔质量由介质文件声明(`carbon_source_mw`)而非代码硬编码。敏感度表写入介质文件与 `docs/interpretation.md` | 已定(2026-10-15,用户与导师反馈 #3,F31) |
 
 ## 17. 里程碑与后续开放问题
 

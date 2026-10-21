@@ -22,7 +22,8 @@ FastQC (raw) → Trimmomatic → FastQC (trimmed) → SPAdes
 | 2 | Adapter/quality trimming | Trimmomatic 0.39 | clean paired reads |
 | 3 | Read QC (trimmed) | FastQC 0.12.1 | post-trim quality |
 | 4 | De novo assembly | SPAdes 4.0.0 (`--careful`) | draft genome |
-| 5 | Assembly QC | QUAST 5.2.0 | N50 / L50 / contigs / GC% (+ reference comparison when supplied) |
+| 5 | Assembly QC | QUAST 5.2.0 | N50 / L50 / contigs / GC% |
+| 5b | Reference comparison *(optional)* | `compare_assembly_ref.py` (BLAST+ 2.16) | genome fraction / identity vs a public reference (F30) |
 | 6 | Completeness | BUSCO 5.8.3 | lineage completeness |
 | 7 | Annotation | Bakta 1.11.4 | GFF3 / FAA / TSV (+ AMR guard) |
 | 8 | Model reconstruction | CarveMe 1.6.6 (SCIP) | draft GEM (SBML) |
@@ -113,6 +114,7 @@ The most relevant ones:
 | `raw_dir` | `../WGSpipeline/raw` | base directory for the `fq1`/`fq2` paths |
 | `bakta_db` | `../WGSpipeline/db/bakta/db-light` | Bakta database (`version.json` acts as an upgrade sentinel) |
 | `busco_db` | `../WGSpipeline/db/busco` | BUSCO lineage download/cache directory |
+| `ref_dir` | `db/reference` | base directory for the optional `reference` column (F30) |
 | `threads_default` | `8` | threads for Trimmomatic / SPAdes |
 | `busco_lineage` | `enterobacterales_odb10` | changes the BUSCO output filenames |
 | `carveme_solver` | `scip` | `cplex`/`gurobi` need a licence |
@@ -131,6 +133,7 @@ data/clean_trimmomatic/      trimmed reads (paired + unpaired)
 data/qc/trimmed/             FastQC on trimmed reads
 assembly/spades/<sample>/    SPAdes assembly (contigs.fasta + side products)
 data/qc/quast/<sample>/      QUAST report.html/.txt/.tsv
+data/qc/refcompare/<sample>/ assembly vs reference: <sample>_refcomp.tsv + *_mqc.tsv (F30)
 data/qc/busco/<sample>/      BUSCO short summaries
 annotation/bakta/<sample>/   Bakta .gff3/.faa/.tsv/.ffn/.gbff/.txt
 models/carveme/<sample>/     CarveMe draft model (.xml + diamond .tsv)
@@ -145,8 +148,12 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 
 `reports/multiqc/multiqc_report.html` is a single self-contained page that:
 
+> New to the output? **[docs/interpretation.md](docs/interpretation.md)** explains every
+> number in it: what it means, when it indicates a problem, and what it does not prove.
+
 - orders **report sections and General Statistics columns by pipeline step**
-  (FastQC → QUAST → BUSCO → CarveMe → MEMOTE → runtimes → software versions), and
+  (FastQC → QUAST → assembly vs reference → BUSCO → CarveMe → growth → MEMOTE → runtimes
+  → software versions), and
 - **embeds the full MEMOTE snapshot report** of every sample inline (each MEMOTE page is a
   self-contained Angular document, so it is wrapped in an isolated `srcdoc` iframe to keep
   its CSS/JS from clashing with the MultiQC page), and
@@ -167,6 +174,64 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 
 The cohort shown in the report is exactly the sample sheet — built-in modules are fed an
 explicit file list, never a directory scan, so subset reports stay consistent.
+
+## Assembly validation (reference genome)
+
+An assembly with a respectable N50 can still be the wrong organism, a contaminated sample, or a
+different strain than the sheet claims. Naming a public reference genome turns "the assembly
+looks plausible" into a measured statement.
+
+The `reference` column is optional. When a row names a FASTA (resolved against `--ref_dir`),
+step 5b aligns that sample's assembly to it and adds a report section:
+
+| column | meaning |
+|---|---|
+| Genome fraction (%) | reference bases covered by accepted alignments / reference length |
+| Identity (%) | length-weighted mean identity over accepted alignments |
+| Mismatches / 100 kbp, Indels / 100 kbp | rates over the aligned assembly |
+| Assembly aligned (%) | assembly bases inside accepted alignments |
+| Aligned contigs (%) | contigs with at least one accepted alignment |
+
+Thresholds are QUAST's defaults (>= 95 % identity, >= 65 bp alignment), so the numbers are
+comparable with a standard QUAST/dnadiff run. BLAST+ already ships in the pinned Bakta
+environment, so this adds no environment. A reference that matches nothing makes the task
+**fail** (exit 2): a wrong reference is worse than none, and a table of zeroes looks like a
+result.
+
+Fetching the two references used in this project's validation (~1.4 MB and ~1.7 MB):
+
+```bash
+mkdir -p db/reference && cd db/reference
+for acc in GCA_000005845.2 GCA_000008865.2; do
+  curl -sSL "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$acc/download?include_annotation_type=GENOME_FASTA" -o "$acc.zip"
+  unzip -o -q "$acc.zip" -d "$acc.d"
+  cp "$(find "$acc.d" -name '*.fna' | head -1)" "$acc.fasta"
+done
+```
+
+Both are complete genomes from RefSeq/GenBank: *E. coli* K-12 substr. MG1655 (4,641,652 bp,
+`U00096.3`) and *E. coli* O157:H7 str. Sakai (5,594,605 bp: chromosome + pOSAK1 + pO157).
+`db/` is git-ignored, so they are fetched, never committed.
+
+Measured on this project's two isolates:
+
+| sample | reference | genome fraction | identity | mismatches / 100 kbp | aligned contigs |
+|---|---|---|---|---|---|
+| SRR1770413 (K-12) | GCA_000005845.2 (MG1655) | 99.38 % | 99.926 % | 67.6 | 30.5 % |
+| SRR10194530 (O157:H7) | GCA_000008865.2 (Sakai) | 97.37 % | 99.721 % | 260.6 | 96.9 % |
+
+The K-12 assembly recovers 99.4 % of MG1655 at 99.93 % identity: that is what "this isolate is
+a K-12 derivative" looks like numerically. The O157:H7 assembly recovers 97.4 % of Sakai at
+99.72 % identity with a four-fold higher mismatch rate — consistent with the same serotype but
+a **different strain** (Sakai is one isolate; the accessory genome differs), not with a broken
+assembly. Note also the aligned-contig asymmetry: only 30.5 % of the K-12 contigs carry 94.5 %
+of its bases (300-odd tiny contigs), while 96.9 % of the O157:H7 contigs align.
+
+**Why not QUAST's own `-r`?** QUAST has no hook for an external aligner: it compiles a bundled
+minimap2 on first use, and on arm64 macOS that compile fails (`-msse2` and `-mfpu=` are
+x86/Linux flags), after which QUAST warns and silently reports reference-independent
+statistics — a reference comparison that is not one. QUAST is therefore left byte-identical to
+the original pipeline and the comparison lives in its own step (F30).
 
 ## Model validation (defined medium)
 

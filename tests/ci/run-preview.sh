@@ -37,6 +37,10 @@ case_specs=(
     "duplicate_name|duplicate sample name CI_A|sample\tfq1\tfq2\nCI_A\tCI_A_1.fastq.gz\tCI_A_2.fastq.gz\nCI_A\tCI_A_1.fastq.gz\tCI_A_2.fastq.gz\n"
     "field_count|expected 3 fields, got 2|sample\tfq1\tfq2\nCI_A\tCI_A_1.fastq.gz\n"
     "missing_fastq|fastq not found|sample\tfq1\tfq2\nCI_A\tnope_1.fastq.gz\tnope_2.fastq.gz\n"
+    # F30: a reference column is optional, but a value that points nowhere must
+    # abort. Silently dropping it would downgrade the assembly evaluation to
+    # "no reference metrics" without saying so.
+    "missing_reference|reference not found|sample\tfq1\tfq2\treference\nCI_A\tCI_A_1.fastq.gz\tCI_A_2.fastq.gz\tnope.fasta\n"
     "missing_sheet|samples.tsv not found|__NOFILE__"
 )
 

@@ -54,6 +54,7 @@ report_section_order:
   fastqc:                    { order: 1000 }   # step 1/3  FastQC (raw + trimmed)
   quast:                     { order: 900 }    # step 5    QUAST assembly QC table
   quast_full:                { order: 850 }    # step 5    QUAST full reports (embedded)
+  assembly_ref:              { order: 870 }    # step 5b   assembly vs reference genome (F30)
   busco:                     { order: 800 }    # step 6    BUSCO completeness
   carveme_summary:           { order: 700 }    # step 8    CarveMe draft model
   growth_on_medium:          { order: 650 }    # step 9    growth on a defined medium (F26/F29)
