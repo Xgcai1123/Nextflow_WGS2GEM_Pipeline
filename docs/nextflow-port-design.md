@@ -1130,6 +1130,18 @@ profiles {
   - **代价**:`multiqc_config.yaml` 不再与上游字节一致 —— 这是**第一处有意偏离 D4**(记作 D24),已在 `docs/asset-sources.md` 就地注明并更新 sha256,同时写明"上游同步时要保留这一处改动"。
   - **验证**:重放生成的报告里版本表为 BLAST / BUSCO / Bakta / CarveMe / FastQC / Growth check / MEMOTE / MultiQC / NextFlow-WGS2GEM 0.1.0 / Nextflow 26.10.0 / QUAST / SPAdes / Trimmomatic,**`Snakemake` 已不存在**。
 
+- **F38 管线图纠错 + 全篇复核（用户发现，2026-10-22）**：用户指出汇总页的 DAG 上有一条**从 raw data 直连 SPAdes 的边**,并问"是画错了还是我们的 PE 结构有问题"。**结论:画错了,管线没有问题。** 证据是源码:`main.nf` 的接线为 `SPADES(TRIMMOMATIC.out.map { n, r1p, r2p, r1u, r2u -> tuple(n, r1p, r2p) })`,而 `SPADES` 进程声明 `input: tuple val(sample), path(r1_paired), path(r2_paired)` —— 它吃的是**修剪后的 paired reads**;原始 reads 只进 `FASTQC_RAW` 与 `TRIMMOMATIC` 两个进程。手绘 ASCII 时我把"raw 是两条分支的共同起点"错画成了一条直连边。
+  - **用户同时指出图"简陋、产物标注不全、方向不明确"**。于是整页重做:
+    - §2 增加**树状图**(纯 HTML/CSS 嵌套列表 + 连接线,无绝对定位,文字不会溢出),`<pre>` 复制版保留;
+    - §3 换成**嵌套流程图**:每行是「进程(tool+版本)→ 产物路径」,缩进即"这个产物喂给谁";新增 **MULTIQC 汇总表**(逐组列出它到底读了哪些文件)、图例,并在图下写明这次的更正;
+    - 去掉手绘 ASCII 作为主图(手绘坐标靠猜,是这次错误的直接来源)。
+  - **按同一标准复核全篇,又抓到三处过度声称**:
+    1. **"SPAdes 的副产物也一并发布" —— 错。** 实测该任务 `out/` 有 206 个文件,但 `results/assembly/<sample>/` 只有 `contigs.fasta`:**Nextflow 只发布声明的输出**。已在流程图、步骤卡、产物表三处改正。
+    2. **"18 个指标的 TSV" —— 错,是 17 个**(文件 18 行含表头)。两处已改。
+    3. **`results/report/nextflow/{report.html,trace.tsv}` 被写成 MULTIQC 的产物 —— 错**,那是**引擎**在运行结束时写的(由 `nextflow.config` 钉住路径)。已拆成独立条目并注明归属。
+  - **复核通过、无需改动的项**(逐条对源码/磁盘):12 个进程的 `input`/`output`/`publishDir`;14 个参数默认值;两样本 Bakta `.tsv` 行数(4891/5496)与 CarveMe diamond 行数(8961/9306);refcomp 的 17 个指标;报告 13 个章节;7 个本地检查 + 4 个 CI job;以及 fastqc/trimmomatic/spades/quast/busco/bakta/carve/memote 的**实际命令行参数**。
+  - **根因与教训**:这些错误全部来自**凭记忆写文档**,而不是**从源码重推**。规则收紧:凡是要进报告的**结构性陈述**(谁吃谁、产物叫什么、哪一步产出什么),必须做**双向核对** —— 一端是 `main.nf` 的 process 契约(`input:`/`output:`/`publishDir`)与 workflow 接线,另一端是**磁盘上的真实产物树**;手绘 ASCII 图尤其危险,因为它不参与任何校验。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式

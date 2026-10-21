@@ -58,6 +58,37 @@
   footer { border-top:1px solid var(--line); margin-top:50px; padding-top:14px;
            color:var(--grey); font-size:12.5px; }
   @media print { body { background:#fff; } nav { display:none; } pre { background:#f4f6f8; color:#111; } }
+
+  /* --- tree / DAG (pure CSS, no absolute positioning) --- */
+  .tree, .dag { list-style:none; margin:10px 0 6px; padding-left:0; font-size:13.5px; }
+  .tree ul, .dag ul { list-style:none; margin:0; padding-left:26px; position:relative; }
+  .tree ul::before, .dag ul::before {
+    content:""; position:absolute; left:10px; top:0; bottom:14px; border-left:1px solid var(--line);
+  }
+  .tree li, .dag li { position:relative; padding:3px 0 3px 16px; }
+  .tree ul > li::before, .dag ul > li::before {
+    content:""; position:absolute; left:-16px; top:15px; width:16px; border-top:1px solid var(--line);
+  }
+  .tree li .n { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; }
+  .tree li .d { color:var(--grey); font-size:12px; margin-left:10px; }
+  .tree > li > .n { font-weight:600; color:var(--navy); }
+  .tree li.dir > .n { font-weight:600; }
+  .tree li.dir > .n::after { content:"/"; color:var(--teal); }
+  .dag li { display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; padding:4px 0 4px 16px; }
+  .dag .p { background:var(--navy); color:#fff; border-radius:6px; padding:3px 10px;
+            font-size:12.5px; font-weight:600; white-space:nowrap; }
+  .dag .p.opt { background:#5d6b7a; }
+  .dag .p .v { font-weight:400; color:#9fb6c9; margin-left:6px; }
+  .dag .o { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#33414f;
+            background:#eef2f6; border:1px solid var(--line); border-radius:5px; padding:2px 7px; }
+  .dag .o .u { color:var(--grey); }
+  .dag .in > .o { background:#fff; border-color:var(--teal); }
+  .dag .why { color:var(--grey); font-size:12px; font-style:italic; }
+  .collector { border:1px solid var(--line); border-radius:8px; background:#fff; padding:12px 16px; margin:16px 0; }
+  .collector h4 { margin:0 0 8px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--grey); margin:8px 0 0; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .swatch { width:14px; height:14px; border-radius:4px; display:inline-block; }
 </style>
 </head>
 <body>
@@ -110,6 +141,50 @@ does not fit the CPU budget queues (see §4 for which steps serialise).</p>
 comes out. <code>logs/</code>, <code>benchmarks/</code>, <code>work/</code> and
 <code>.nextflow/</code> are run bookkeeping. Nothing generated is committed.</p>
 
+<h3>The tree, visually</h3>
+<ul class="tree">
+  <li class="dir"><span class="n">WGSpipeline-nextflow</span>
+    <ul>
+      <li><span class="n">main.nf</span><span class="d">the whole workflow: validation + 12 processes</span></li>
+      <li><span class="n">nextflow.config</span><span class="d">parameters, output paths, resources, report paths</span></li>
+      <li><span class="n">samples.tsv</span> · <span class="n">samples.with_reference.tsv</span><span class="d">the cohort, with and without the optional reference column</span></li>
+      <li class="dir"><span class="n">envs</span><span class="d">8 pinned conda environments</span></li>
+      <li class="dir"><span class="n">scripts</span><span class="d">helpers: multiqc_extras, the two report embedders, check_growth, compare_assembly_ref, normalize_report</span></li>
+      <li class="dir"><span class="n">bin</span><span class="d">task_env.sh (wall-time bookkeeping) and the AMR-guard bakta wrapper</span></li>
+      <li class="dir"><span class="n">media</span><span class="d">m9_aerobic.yaml — the declared growth medium</span></li>
+      <li><span class="n">multiqc_config.yaml</span> · <span class="n">multiqc_nextflow.yaml</span><span class="d">report config, then the presentation overlay</span></li>
+      <li class="dir"><span class="n">docs</span><span class="d">design record (F/D), interpretation guide, project tree, this page</span></li>
+      <li class="dir"><span class="n">tests/ci</span><span class="d">7 tool-free checks + fixtures</span></li>
+      <li class="dir"><span class="n">.github/workflows</span><span class="d">ci.yml — 4 jobs</span></li>
+      <li class="dir"><span class="n">data</span><span class="d">INPUT, git-ignored</span>
+        <ul>
+          <li class="dir"><span class="n">raw</span><span class="d">paired-end FASTQ</span></li>
+          <li class="dir"><span class="n">db</span><span class="d">bakta/db-light, busco lineage cache</span></li>
+          <li class="dir"><span class="n">reference</span><span class="d">optional NCBI genomes (step 5b)</span></li>
+          <li class="dir"><span class="n">cache/amr_guard</span><span class="d">persistent AMR-guard cache</span></li>
+        </ul>
+      </li>
+      <li class="dir"><span class="n">results</span><span class="d">OUTPUT, git-ignored</span>
+        <ul>
+          <li class="dir"><span class="n">qc</span><span class="d">fastqc_raw, fastqc_trimmed, quast, busco, refcompare</span></li>
+          <li class="dir"><span class="n">reads</span><span class="d">trimmed FASTQ</span></li>
+          <li class="dir"><span class="n">assembly</span> · <span class="n">annotation</span><span class="d">SPAdes and Bakta output per sample</span></li>
+          <li class="dir"><span class="n">models</span><span class="d">carveme (the model), memote, growth</span></li>
+          <li class="dir"><span class="n">report</span><span class="d">multiqc_report.html, multiqc_report_data, nextflow/</span></li>
+        </ul>
+      </li>
+      <li><span class="n">logs</span> · <span class="n">benchmarks</span><span class="d">per-step logs and wall times</span></li>
+      <li><span class="n">work</span> · <span class="n">.nextflow</span><span class="d">engine cache and environments</span></li>
+    </ul>
+  </li>
+</ul>
+
+<h3>Copy-friendly form</h3>
+
+<p>Two roots and nothing else: <code>data/</code> is what goes in, <code>results/</code> is what
+comes out. <code>logs/</code>, <code>benchmarks/</code>, <code>work/</code> and
+<code>.nextflow/</code> are run bookkeeping. Nothing generated is committed.</p>
+
 <pre><span class="c"># sources (tracked)</span>
 main.nf                     the whole workflow: validation + 12 processes, one file
 nextflow.config             every parameter, output path, resource directive
@@ -150,48 +225,105 @@ results/report/             multiqc_report.html, multiqc_report_data/, nextflow/
 generator refuses to run when a tracked file is unclassified.</p>
 
 <h2 id="dag">3 · The DAG</h2>
-<pre>                                    ┌──────────────┐
-  data/raw/&lt;sample&gt;_{1,2}.fastq.gz ─┤ 1 FASTQC_RAW │──html+zip──────────────┐
-                │                   └──────────────┘                        │
-                │                   ┌──────────────┐                        │
-                ├───────────────────┤2 TRIMMOMATIC │──paired reads──┐       │
-                │                   └──────────────┘                │       │
-                │                                                   ▼       │
-                │                                   ┌───────────────────┐   │
-                │                                   │3 FASTQC_TRIMMED   │───┤
-                │                                   └───────────────────┘   │
-                │                                                   │       │
-                │                                                   ▼       │
-                │                                   ┌───────────────────┐   │
-                └────(the raw pair, unchanged)─────►│ 4 SPADES          │   │
-                                                    └─────────┬─────────┘   │
-                            contigs.fasta ┌───────────────────┼─────────────┤
-                                          ▼                   ▼             ▼
-                                  ┌──────────────┐   ┌──────────────┐  ┌──────────────┐
-                                  │ 5 QUAST      │   │ 6 BUSCO      │  │ 7 BAKTA      │
-                                  └──────┬───────┘   └──────┬───────┘  └──────┬───────┘
-                                         │                  │                 │ .faa
-                                  ┌──────┴───────┐          │                 ▼
-                                  │ 5b ASSEMBLY_ │          │        ┌──────────────┐
-                                  │    REF (opt) │          │        │ 8 CARVEME    │
-                                  └──────┬───────┘          │        └──────┬───────┘
-                                         │                  │               │ .xml
-                                         │                  │      ┌────────┴────────┐
-                                         │                  │      ▼                 ▼
-                                         │                  │ ┌──────────┐   ┌──────────────┐
-                                         │                  │ │9 GROWTH  │   │10 MEMOTE     │
-                                         │                  │ │  CHECK   │   │ (after 9)    │
-                                         │                  │ └────┬─────┘   └──────┬───────┘
-                                         ▼                  ▼      ▼                ▼
-                                  ┌───────────────────────────────────────────────────────┐
-                                  │ 11 MULTIQC  → results/report/multiqc_report.html       │
-                                  └───────────────────────────────────────────────────────┘</pre>
+<p>Read it top-down. Each line is <b>process → the artifact it produces</b>; indentation means
+"this artifact is what feeds the next block". Every artifact name is the real path pattern.</p>
 
-<div class="note"><b>Two facts about this graph that surprise people.</b>
-First, steps 1 and 2 are <i>parallel</i> branches off the same input: FastQC is not a gate for
-trimming, so killing FastQC does not stop the assembly. Second, everything from step 4 onwards is
-per sample and independent — one sample failing does not stop the other
-(<code>errorStrategy = 'finish'</code>).</div>
+<ul class="dag">
+  <li class="in"><span class="o">data/raw/&lt;sample&gt;_{1,2}.fastq.gz</span>
+      <span class="why">the raw pair — read-only, never modified</span>
+    <ul>
+      <li><span class="p">1 FASTQC_RAW<span class="v">FastQC 0.12.1</span></span>
+          <span class="o">results/qc/fastqc_raw/&lt;s&gt;_{1,2}_fastqc.{html,zip}</span>
+          <span class="why">→ MultiQC (zips)</span></li>
+      <li><span class="p">2 TRIMMOMATIC<span class="v">Trimmomatic 0.39</span></span>
+          <span class="o">results/reads/&lt;s&gt;_R{1,2}_{paired,unpaired}.fastq.gz</span>
+          <span class="why">→ 3 and 4 (paired only)</span>
+        <ul>
+          <li><span class="p">3 FASTQC_TRIMMED<span class="v">FastQC 0.12.1</span></span>
+              <span class="o">results/qc/fastqc_trimmed/&lt;s&gt;_R{1,2}_paired_fastqc.{html,zip}</span>
+              <span class="why">→ MultiQC (zips)</span></li>
+          <li><span class="p">4 SPADES<span class="v">SPAdes 4.0.0 --careful</span></span>
+              <span class="o">results/assembly/&lt;s&gt;/contigs.fasta</span>
+              <span class="why">→ 5, 5b, 6, 7 (only contigs.fasta is published; Spades' side products stay in work/)</span>
+            <ul>
+              <li><span class="p">5 QUAST<span class="v">QUAST 5.2.0</span></span>
+                  <span class="o">results/qc/quast/&lt;s&gt;/report.{html,txt,tsv}</span>
+                  <span class="why">→ MultiQC: tsv as a table, html embedded</span></li>
+              <li><span class="p opt">5b ASSEMBLY_REF<span class="v">BLASTN 2.17.0 · optional</span></span>
+                  <span class="o">results/qc/refcompare/&lt;s&gt;/{&lt;s&gt;_refcomp.tsv, &lt;s&gt;_assembly_ref_mqc.tsv}</span>
+                  <span class="why">needs a reference genome per row → MultiQC</span></li>
+              <li><span class="p">6 BUSCO<span class="v">BUSCO 5.8.3</span></span>
+                  <span class="o">results/qc/busco/&lt;s&gt;/short_summary.specific.enterobacterales_odb10.&lt;s&gt;.{txt,json}</span>
+                  <span class="why">→ MultiQC</span></li>
+              <li><span class="p">7 BAKTA<span class="v">Bakta 1.11.4 + AMR guard</span></span>
+                  <span class="o">results/annotation/&lt;s&gt;/&lt;s&gt;.{gff3,faa,ffn,gbff,tsv,txt}</span>
+                  <span class="why">→ 8, which takes the .faa</span>
+                <ul>
+                  <li><span class="p">8 CARVEME<span class="v">CarveMe 1.6.6 · SCIP</span></span>
+                      <span class="o">results/models/carveme/&lt;s&gt;/&lt;s&gt;.xml</span>
+                      <span class="why">the model; also .faa and the diamond .tsv. The .faa is staged into a private copy first</span>
+                    <ul>
+                      <li><span class="p">9 GROWTH_CHECK<span class="v">COBRApy 0.32.1 · GLPK</span></span>
+                          <span class="o">results/models/growth/{growth_mqc.tsv, growth.tsv}</span>
+                          <span class="why">all models at once → MultiQC; emits the trigger 10 waits on</span></li>
+                      <li><span class="p">10 MEMOTE<span class="v">MEMOTE 0.17.0</span></span>
+                          <span class="o">results/models/memote/&lt;s&gt;/{index.html, memote_result.json, memote_summary.tsv}</span>
+                          <span class="why">→ MultiQC: tsv as a table, html embedded per sample</span></li>
+                    </ul>
+                  </li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<div class="collector">
+  <h4>11 · MULTIQC — the collector, one task for the whole cohort</h4>
+  <p class="small">It waits for everything above and reads exactly these groups (no directory
+  scanning; each is an explicit file list):</p>
+  <table>
+    <thead><tr><th>fed by</th><th>files</th></tr></thead>
+    <tbody>
+      <tr><td>1 FASTQC_RAW / 3 FASTQC_TRIMMED</td><td><code>results/qc/fastqc_raw/*_fastqc.zip</code>, <code>results/qc/fastqc_trimmed/*_paired_fastqc.zip</code></td></tr>
+      <tr><td>5 QUAST</td><td><code>results/qc/quast/&lt;s&gt;/report.tsv</code> (table) and <code>report.html</code> (embedded)</td></tr>
+      <tr><td>5b ASSEMBLY_REF</td><td><code>results/qc/refcompare/&lt;s&gt;/&lt;s&gt;_assembly_ref_mqc.tsv</code></td></tr>
+      <tr><td>6 BUSCO</td><td><code>results/qc/busco/&lt;s&gt;/short_summary*.txt</code> (staged by symlink)</td></tr>
+      <tr><td>7–10</td><td>CarveMe model size, MEMOTE scores and full pages, growth + yield, per-step runtimes (built by <code>scripts/multiqc_extras.py</code>)</td></tr>
+      <tr><td>engine / pipeline</td><td><code>custom_content/nextflow_mqc_versions.yaml</code> — the versions table row, written at run time</td></tr>
+    </tbody>
+  </table>
+  <p><b>output</b> <span class="o">results/report/multiqc_report.html</span>
+     <span class="o">results/report/multiqc_report_data/</span>
+</p>
+  <p class="small"><b>engine, every run</b> (not MultiQC): <span class="o">results/report/nextflow/report.html</span>
+     <span class="o">results/report/nextflow/trace.tsv</span> — Nextflow's own execution report and trace,
+     pinned there by <code>nextflow.config</code> so they do not land in the project root.</p>
+</div>
+
+<p class="legend">
+  <span><span class="swatch" style="background:#0f223d"></span> process (tool + version)</span>
+  <span><span class="swatch" style="background:#5d6b7a"></span> optional step</span>
+  <span><span class="swatch" style="background:#eef2f6;border:1px solid #d3dae3"></span> artifact (path pattern)</span>
+</p>
+
+<div class="note"><b>Two facts about this graph that surprise people — and one correction.</b>
+<ol>
+  <li>Steps 1 and 2 are <b>parallel branches</b> off the same input. FastQC is not a gate for
+      trimming, so killing FastQC does not stop the assembly. That is why the failure-isolation
+      test kills <i>both</i> entry points.</li>
+  <li>Everything from step 4 onwards is per sample and independent: one sample failing does not
+      stop the other (<code>errorStrategy = 'finish'</code>).</li>
+  <li><b>Correction (2026-10-22).</b> An earlier version of this page drew an edge from the raw
+      FASTQ straight to SPAdes. That was a drawing error on our side, not the pipeline:
+      <code>main.nf</code> wires <code>SPADES(TRIMMOMATIC.out.map { … })</code> and the process
+      declares <code>path(r1_paired), path(r2_paired)</code>, so Spades consumes the
+      <b>trimmed paired</b> reads. Nothing downstream ever reads the raw files except
+      FASTQC_RAW and TRIMMOMATIC.</li>
+</ol></div>
 
 <h4>What runs in parallel, and what does not</h4>
 <table>
@@ -259,8 +391,9 @@ FastQC failure does not stop it. That is why the failure-isolation test kills bo
 <dl class="io">
   <dt>input</dt><dd><code>results/reads/&lt;sample&gt;_R1_paired.fastq.gz</code> + <code>…_R2_paired</code></dd>
   <dt>tool</dt><dd>SPAdes 4.0.0 <code>--careful</code>, <code>--threads $task.cpus</code></dd>
-  <dt>output</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code> plus SPAdes' own side
-    products (the whole task directory is published)</dd>
+  <dt>output</dt><dd><code>results/assembly/&lt;sample&gt;/contigs.fasta</code> — <b>only</b> this one file is
+    published. SPAdes writes ~200 side products into the task's <code>out/</code>, but Nextflow
+    publishes declared outputs only, so they stay in <code>work/</code>.</dd>
   <dt>consumed by</dt><dd>everything downstream: <b>5 QUAST</b>, <b>5b ASSEMBLY_REF</b>,
     <b>6 BUSCO</b>, <b>7 BAKTA</b></dd>
 </dl>
@@ -289,7 +422,7 @@ FastQC failure does not stop it. That is why the failure-isolation test kills bo
     <code>scripts/compare_assembly_ref.py</code>; thresholds are QUAST's defaults
     (identity ≥ 95 %, alignment ≥ 65 bp)</dd>
   <dt>output</dt><dd><code>results/qc/refcompare/&lt;sample&gt;/&lt;sample&gt;_refcomp.tsv</code>
-    (18 metrics) and <code>…_assembly_ref_mqc.tsv</code> (the report row)</dd>
+    (17 metrics) and <code>…_assembly_ref_mqc.tsv</code> (the report row)</dd>
   <dt>consumed by</dt><dd><b>11 MULTIQC</b> only</dd>
 </dl>
 <p class="small">Runs <i>only</i> for rows with a reference: no reference, no task, no report
@@ -371,8 +504,9 @@ row per sample. It writes no benchmark record (that would surface as a raw colum
     <code>custom_content/nextflow_mqc_versions.yaml</code> (the engine version, written at run time)</dd>
   <dt>tool</dt><dd>MultiQC 1.21, then <code>scripts/normalize_report.py</code></dd>
   <dt>output</dt><dd><code>results/report/multiqc_report.html</code> (self-contained),
-    <code>results/report/multiqc_report_data/</code> (parsed data), and Nextflow's own
-    <code>results/report/nextflow/{report.html,trace.tsv}</code></dd>
+    <code>results/report/multiqc_report_data/</code> (parsed data). Nextflow itself also writes
+    <code>results/report/nextflow/{report.html,trace.tsv}</code> at the end of the run — that is the
+    engine's report, not MultiQC's.</dd>
   <dt>consumed by</dt><dd>a human. Nothing in the pipeline reads it back.</dd>
 </dl>
 <p class="small">The normaliser rewrites the visible header text into one convention and drops a
@@ -414,14 +548,14 @@ SRR10194530 SRR10194530_1.fastq.gz     SRR10194530_2.fastq.gz     Escherichia co
 <tr><td><code>results/qc/fastqc_trimmed/</code></td><td>ibid. after trimming</td></tr>
 <tr><td><code>results/qc/quast/&lt;sample&gt;/</code></td><td><code>report.html</code>, <code>report.txt</code>, <code>report.tsv</code></td></tr>
 <tr><td><code>results/qc/busco/&lt;sample&gt;/</code></td><td>short summaries (json + txt)</td></tr>
-<tr><td><code>results/qc/refcompare/&lt;sample&gt;/</code></td><td>18-metric TSV + the report row</td></tr>
+<tr><td><code>results/qc/refcompare/&lt;sample&gt;/</code></td><td>17-metric TSV + the report row</td></tr>
 <tr><td><code>results/reads/</code></td><td>4 trimmed FASTQ per sample</td></tr>
-<tr><td><code>results/assembly/&lt;sample&gt;/</code></td><td><code>contigs.fasta</code> + SPAdes side products</td></tr>
+<tr><td><code>results/assembly/&lt;sample&gt;/</code></td><td><code>contigs.fasta</code> only — SPAdes' side products stay in <code>work/</code></td></tr>
 <tr><td><code>results/annotation/&lt;sample&gt;/</code></td><td>gff3, faa, ffn, gbff, tsv, txt</td></tr>
 <tr><td><code>results/models/carveme/&lt;sample&gt;/</code></td><td><code>&lt;sample&gt;.xml</code> (the model), faa, diamond tsv</td></tr>
 <tr><td><code>results/models/memote/&lt;sample&gt;/</code></td><td>index.html, memote_result.json, memote_summary.tsv</td></tr>
 <tr><td><code>results/models/growth/</code></td><td>growth_mqc.tsv, growth.tsv</td></tr>
-<tr><td><code>results/report/</code></td><td>multiqc_report.html, multiqc_report_data/, nextflow/</td></tr>
+<tr><td><code>results/report/</code></td><td>multiqc_report.html, multiqc_report_data/, and nextflow/ (the engine's own report + trace)</td></tr>
 <tr><td><code>logs/</code>, <code>benchmarks/</code></td><td>per-step logs, per-step wall times</td></tr>
 </tbody></table>
 

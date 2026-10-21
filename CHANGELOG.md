@@ -141,6 +141,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Corrected the pipeline diagram and audited the summary page against source.** The diagram drew
+  an edge from the raw FASTQ straight to SPAdes; `main.nf` wires
+  `SPADES(TRIMMOMATIC.out.map { … })` and the process declares `path(r1_paired), path(r2_paired)`,
+  so Spades consumes the **trimmed paired** reads and the raw files feed only FastQC and
+  Trimmomatic. That was a drawing error, not a pipeline defect — and it is exactly why hand-drawn
+  ASCII is no longer the primary picture.
+
+  The architecture section is now a nested flow in which every line is `process → the artifact it
+  produces`, so indentation is the edge and every output is named with its real path pattern; a
+  MultiQC collector table lists, group by group, exactly which files it reads. The project
+  structure gained a visual tree (CSS, no absolute positioning) while the copy-friendly `<pre>`
+  stays.
+
+  Re-deriving every claim from the source and from the published tree turned up three more
+  over-claims, all fixed: Spades publishes **only** `contigs.fasta` (its ~200 side products stay in
+  `work/`, because Nextflow publishes declared outputs only); the reference comparison TSV has
+  **17** metrics, not 18; and `results/report/nextflow/{report.html,trace.tsv}` is the **engine's**
+  report, not MultiQC's. Everything else was checked and stands (12 process contracts, 14 parameter
+  defaults, the two Bakta line counts, the CarveMe diamond counts, the report's 13 sections, the
+  seven checks and four CI jobs). Design document F38.
 - **Report cells no longer repeat a unit the header already carries.** MultiQC renders module
   columns as `N50 (Kbp) | 244.8 Kbp` and `% Dups | 12.9 %`; the duplication is baked into the
   module, where one `suffix` feeds both the title and every cell (setting it empty yields
