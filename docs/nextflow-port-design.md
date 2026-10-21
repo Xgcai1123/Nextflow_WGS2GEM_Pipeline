@@ -1012,7 +1012,7 @@ profiles {
 - **F26 生长验证进管线、进报告（用户指出"multiqc 里好像没有这个信息"，2026-10-15）**：F25 的结论此前只在**手动**调用时产生，报告里没有它；而报告里唯一与模型质量相关的数字（MEMOTE 总分）又**不覆盖**生长测试（F25 发现其权重为 0）。于是新增 `GROWTH_CHECK` process（coda = `envs/memote.yaml`，含 cobra + 求解器）。实现与两个关键机制：
   - **全队列一个任务**（不是每样本一个），与报告"一个章节、每样本一行"同形（cf. D15）。产出 `models/growth/growth_mqc.tsv`（自描述）+ `growth.tsv` + `logs/growth/growth_check.log`；MULTIQC 把它作为 **`path` 文件输入**（既传入命令行、又天然构成对 GROWTH_CHECK 的依赖，无需再塞进 `up_ok`）。
   - **章节配置写在文件头**，由 MultiQC 的 `_find_file_header()` 解析：它把文件里**所有 `#` 开头的行**去掉 `#` 后拼接成 YAML。这是**被迫也是刻意**的选择——在覆盖层里声明需要 `sp:`，而第二个 `sp:` 会**替换**（非深合并）复用配置 `multiqc_config.yaml` 的 `sp:` 块，静默丢掉全部既有自定义内容章节（F21）。已用 **MultiQC 自己的解析器**验证该文件头：返回 dict，`id=growth_on_medium`、`plot_type=table`、`headers` 五列齐全、`pconfig.id=growth_on_medium_table`。
-  - **排序 550**：紧接 MEMOTE 表（600）之后、**在内嵌完整报告与耗时表之前**。理由：两张"摘要表"（MEMOTE、生长）保持管线顺序相邻，而 MEMOTE/QUAST 的完整内嵌文档（合计约 9 MB 的 iframe）作为附录排在后面；若把生长表排到那些内嵌文档之后，读者要先翻过两个巨型 iframe 才看得到它。（`memote_full_*` 走默认 order、无法静态排序——见 D15。）
+  - **排序 650**（F29 起；原为 550）：紧接 CarveMe 表（700）之后、**在 MEMOTE 表（600）之前**。理由：生长检查在管线里本来就先跑（见 F29），报告里的位置要与之相符；两者都属"摘要表"，且都排在内嵌完整文档（合计约 9 MB 的 iframe）之前，免得读者翻过巨型 iframe 才看得到。（`memote_full_*` 走默认 order、无法静态排序——见 D15。）
   - **`--report-only` 的语义（D17）**：窗口越界**只报告、不失败**（窗口是 *E. coli* 特定的，而 `--busco_lineage` 可换、样本可为非肠杆菌）；**介质与模型不匹配仍然 exit 2**（那是配置缺陷，不是生物学发现）。所以 66 h⁻¹ 这类泄漏会明确出现在报告表格里，而不会让整条 run 死掉。
   - **不写 benchmark**：`benchmarks/` 承载 Snakemake 的步骤集合，`multiqc_extras.py` 用 `STEP_LABELS` 把它映射成带标签的列；新步骤没有标签，文件会以生名 `growth_check` 出现在耗时表里。
   - **顺带抓到一个真实漏洞（检查套件立功）**：新 `publishDir` 未在 `tests/ci/ci.config` 中重定向，第一次 `-stub-run` 就把**空占位文件发布进了真实 `models/growth/`**——被 **F18 守卫当场抓出**（`run-stub-smoke.sh` 的 `find -newer` 断言报 "no repository output file modified" 失败）。已补 ci.config 重定向并删除两个 0 字节污染文件。这正是那道防线的价值。
@@ -1040,6 +1040,14 @@ profiles {
     **对策**：CI 改成 `pip install cobra pyyaml`;`run-growth-check.sh` 开头**同时预检 cobra 与 yaml**，缺任一个就以 **exit 2** 退出并打印确切的安装命令与 `PYTHON=` 用法。本地用一个"装了 cobra 但没有 yaml"的干净 venv 验证了新预检（exit 2 + 明确提示），用完整环境验证 16 条断言仍全绿。
   - **根因三（可诊断性，非缺陷）**：`run-stub-smoke.sh` 在一次早退后仍然跑完 65 条产物断言，把"1 条根因"淹没成"65 条失败"。它确实把 nextflow 输出 tail 打了出来（根因就在那段里），行为保留;教训记下:**排查 CI 失败先看 `---- nextflow output ----` 段**，而不是数 FAIL 行数。
   - **验证方式也改进了**：这次不再"本地绿就宣布 CI 绿"，而是 push 后**回读 GitHub 上的 run 结果**再下结论（本条的结论即为回读所得）。
+
+- **F29 生长检查必须在 MEMOTE 之前——而且"写在前面"并不等于"先跑"（用户与导师反馈，2026-10-15，本轮最重要的一条）**：要求是 growth medium checking 排在 MEMOTE 前面。动机很实在:生长检查约 6 秒、回答的是"这个模型到底能不能活";MEMOTE 约 250 秒/样本、评分口径更窄,而且它的生长测试权重为 0、断言极性还反了(F25)。所以便宜且更根本的检查应当先跑,让不可行的模型**快速失败**。
+  - **实现上的关键坑**：在 Nextflow 里把 `GROWTH_CHECK(...)` 写在 `MEMOTE(...)` 前面是**装饰性的**——两者都只依赖 CARVEME,是两条独立分支,引擎可以任意并行。要真正定序,必须造一条**数据流边**。
+  - **第一次修法错了,而且被测试抓到**：最初把 trigger 声明成 MEMOTE 的**第二个 input**(`val growth_done`),与"每样本"的 tuple 通道并存时,**单值通道只被消费一次** → 两个样本只跑了 1 个 MEMOTE,**总任务数从 24 掉到 23**。是 `run-stub-smoke.sh` 的任务数断言当场报红。**修法**:把 flag 并入 tuple(`CARVEME.out...combine(GROWTH_CHECK.out.tsv.map { _f -> true })`),`combine` 把单值广播到每个样本——语义上也更准确:每个样本任务都"携带"这个已完成标记。
+  - **顺带把断言升级**：任务数只能说明"少了",不能说明"少了哪个"。已在 `run-stub-smoke.sh` 增加**顺序断言**:`Submitted process > GROWTH_CHECK` 的行号必须早于第一个 `Submitted process > MEMOTE`。这样"顺序边掉了"会直接报红,而不是等到某天有人数任务。
+  - **报告顺序同步**:`growth_on_medium` 650 > `memote_summary` 600(即位于 CarveMe 700 之后、MEMOTE 之前),报告与执行顺序一致。
+  - **步骤重编号**:8 CarveMe → **9 Growth** → **10 MEMOTE** → 11 MultiQC;README(步骤表、DAG 图、Report/Model validation 段)、本文档、CHANGELOG、`tests/ci/README.md` 全部同步。
+  - **实测**:DAG 24 任务;日志顺序 `GROWTH_CHECK (cohort)` → `MEMOTE (CI_B)` → `MEMOTE (CI_A)` → `MULTIQC`;`nextflow lint` 0 error / 34 warning(≤38 棘轮);`run-stub-smoke` 全绿(含新增顺序断言)。
 
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
@@ -1144,6 +1152,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D16 | 生长验证**自建**而非委托上游：介质版本化为 `media/m9_aerobic.yaml`（组分取 CarveMe 自带 M9 行，不自行发明），断言由 `scripts/check_growth.py` 承担（组分可映射 / 落窗 [0.4,1.5] / 物理上限 2.81 / 无碳源为 0 / 厌氧更低）。理由：MEMOTE 0.17.0 的 `test_fast_growth_default` 断言极性反了、且该组测试进不了分数（F25），把物理上限委托给它等于没有守卫。**不**把该断言塞进 `main.nf` 做硬失败：窗口是 *E. coli* 特定的，而 BUSCO 谱系可换、样本可为非肠杆菌；管线的普适断言只有"不长于已知最快细菌"与"无碳源不长" | 已定（2026-10-15，F25） |
 | D17 | 生长验证**入管线**的具体形态：全队列**一个** `GROWTH_CHECK` 任务（与报告"一章节、每样本一行"同形，cf. D15）；章节配置写在 `*_mqc.tsv` 的**文件头**而非覆盖层（否则需要第二个 `sp:`，会替换掉复用配置的 sp 块，F21）；`--report-only` = 窗口越界只报告不失败，介质与模型不匹配仍 exit 2；**不写 benchmark**（会以生名 `growth_check` 出现在耗时表） | 已定（2026-10-15，F26） |
 | D18 | CI 的 CPU 上限写在 `tests/ci/ci.config`（`process.resourceLimits = [cpus: 1]`），**不**削弱 `nextflow.config`：runner 只有 2 核而真实工具声明 4–8，Nextflow 会直接拒绝调度（F28）。用单一上限而非逐 process 的 `withName` 列表，因为后者会随新增 process 静默失效；stub 任务不执行工具，CPU 声明在 CI 里无意义 | 已定（2026-10-15，F28） |
+| D19 | 生长检查排在 MEMOTE **之前**,且用**数据流边强制**(MEMOTE 消费由 GROWTH_CHECK 广播出的 trigger,`combine` 到每样本),不靠声明顺序;报告章节顺序同步为 growth(650) > memote(600)。理由:6 s vs 250 s/样本,生长是更根本的可存活性问题;MEMOTE 的生长测试权重为 0 且极性反了(F25) | 已定(2026-10-15,用户与导师反馈,F29) |
 
 ## 17. 里程碑与后续开放问题
 

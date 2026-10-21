@@ -56,8 +56,8 @@ report_section_order:
   quast_full:                { order: 850 }    # step 5    QUAST full reports (embedded)
   busco:                     { order: 800 }    # step 6    BUSCO completeness
   carveme_summary:           { order: 700 }    # step 8    CarveMe draft model
-  memote_summary:            { order: 600 }    # step 9    MEMOTE model quality
-  growth_on_medium:          { order: 550 }    # step 10   growth on a defined medium (F26)
+  growth_on_medium:          { order: 650 }    # step 9    growth on a defined medium (F26/F29)
+  memote_summary:            { order: 600 }    # step 10   MEMOTE model quality
   pipeline_runtime:          { order: -100 }   # summary   per-step runtimes
   multiqc_software_versions: { order: -200 }   # always last
 

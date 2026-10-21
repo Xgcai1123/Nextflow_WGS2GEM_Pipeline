@@ -40,6 +40,24 @@ submitted=$(grep -c 'Submitted process' "${log}" || true)
 # + MULTIQC = 24.
 expect_eq "task count (2 samples x 11 steps + growth check + MultiQC)" "24" "${submitted}"
 
+# F29: the growth check must be ORDERED before MEMOTE. Declaration order in
+# main.nf does not achieve that (both branches depend only on CARVEME), so the
+# dataflow edge has to be asserted. This also catches the failure mode that broke
+# it once: a single-valued input channel next to a per-sample one is consumed
+# once, which silently drops every task but the first (visible in the count above
+# too, but the count alone does not say WHICH task went missing).
+growth_line=$(grep -n 'Submitted process > GROWTH_CHECK' "${log}" | head -1 | cut -d: -f1)
+memote_line=$(grep -n 'Submitted process > MEMOTE' "${log}" | head -1 | cut -d: -f1)
+if [ -n "${growth_line}" ] && [ -n "${memote_line}" ]; then
+    if [ "${growth_line}" -lt "${memote_line}" ]; then
+        pass "growth check is ordered before MEMOTE (F29)"
+    else
+        fail "MEMOTE was submitted before the growth check -- the F29 ordering edge was lost"
+    fi
+else
+    fail "could not find GROWTH_CHECK / MEMOTE submission lines in the run log"
+fi
+
 if [ "${status}" -ne 0 ]; then
     echo "  ---- nextflow output ----"
     tail -30 "${log}" | sed 's/^/    /'

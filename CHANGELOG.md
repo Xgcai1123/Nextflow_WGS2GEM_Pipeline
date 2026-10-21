@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from the `#`-prefixed YAML. That is deliberate: declaring it in the overlay would need an
     `sp:` entry, and a second `sp:` REPLACES the block in the reused `multiqc_config.yaml`
     (replace-not-merge, F21), silently dropping every existing custom-content section;
-  - the section is ordered 550, i.e. directly after the MEMOTE table (600) and before the embedded
+  - the section is ordered 650, i.e. directly after the CarveMe table (700) and before MEMOTE (600)
     full reports and the runtimes table: the summary tables stay in pipeline order, the large
     embedded documents follow;
   - `--report-only` means a plausibility-window violation is **reported** (it appears in the
@@ -150,6 +150,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The growth check now runs before MEMOTE, and the order is enforced rather than implied.**
+  The growth check costs ~6 s and answers whether the model is viable at all; MEMOTE costs
+  ~250 s per sample and scores something narrower, so the cheap fundamental check runs first
+  and an inviable model fails fast. Declaration order in `main.nf` would have been cosmetic —
+  both branches depend only on CarveMe, so Nextflow is free to run them in either order — so
+  MEMOTE now consumes a trigger broadcast from `GROWTH_CHECK`. The report order follows (growth
+  at 650, before MEMOTE at 600) and the steps are renumbered: 8 CarveMe, **9 growth**,
+  **10 MEMOTE**, 11 MultiQC. The first attempt at the edge was wrong in an instructive way: a
+  single-valued `val` input next to the per-sample tuple is consumed once, so only one of the
+  two MEMOTE tasks ran (24 tasks became 23). The stub-smoke task count caught it; the flag is
+  now part of the tuple, and that check additionally asserts the submission order (F29/D19).
 - **MEMOTE figures corrected, and what that score does *not* cover.** `README.md` and the design
   document quoted total scores **68.0 / 67.7**; those are *truncations*, while the pipeline's own
   tables (`memote_score.tsv`) round the raw `0.680641 / 0.677781` to **68.1 / 67.8**, which the

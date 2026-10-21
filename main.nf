@@ -294,6 +294,8 @@ process CARVEME {
     """
 }
 
+// step 10 -- MEMOTE (model quality suite). Runs AFTER GROWTH_CHECK (step 9); the
+// ordering is enforced by the `growth_done` edge below, not by file order (F29).
 process MEMOTE {
     tag "${sample}"
     conda "${params.envs_dir}/memote.yaml"
@@ -301,7 +303,14 @@ process MEMOTE {
     publishDir(path: { "${params.memote_dir}/${sample}" }, pattern: 'out/**', mode: 'copy', overwrite: true,
                saveAs: { filename -> filename.startsWith('out/') ? filename - 'out/' : filename })
 
-    input:  tuple val(sample), path(model)
+    input:
+    // F29: `growth_done` is an ordering edge from GROWTH_CHECK. The value is
+    // unused; the CHANNEL is the point -- without it this branch and GROWTH_CHECK
+    // could run in either order, because both depend only on CARVEME. It is part
+    // of the tuple (rather than a second input) on purpose: a single-valued input
+    // channel next to a per-sample one is consumed once, which silently drops all
+    // but the first task (caught by the stub-smoke task count).
+    tuple val(sample), path(model), val(growth_done)
     output: tuple val(sample), path("out/index.html"),
             path("out/memote_result.json"), path("out/memote_summary.tsv")
 
@@ -312,10 +321,14 @@ process MEMOTE {
     bench_start
     mkdir -p ${params.logs_dir}/memote
     mkdir -p out
+    # F29: the cheap viability check (~6 s) runs before this suite (~250 s/sample);
+    # record that the edge held so a log reader can see the ordering.
+    echo "[ordering] growth check completed before MEMOTE (${growth_done})" \\
+        >> ${params.logs_dir}/memote/${sample}.log
     # PITFALL (kept): invoke with the conda env's own python3 (cobra module).
     "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/memote_report.py ${model} \\
         --outdir out --sample ${sample} --solver ${params.memote_solver} \\
-        > ${params.logs_dir}/memote/${sample}.log 2>&1
+        >> ${params.logs_dir}/memote/${sample}.log 2>&1
     bench_finish memote ${sample}
     """
 
@@ -326,6 +339,9 @@ process MEMOTE {
     """
 }
 
+// step 9 -- growth check on a declared medium. Defined after MEMOTE in this file
+// because it was added later, but it RUNS first: see the ordering edge in
+// workflow.main (F29).
 process GROWTH_CHECK {
     tag "cohort"
     conda "${params.envs_dir}/memote.yaml"     // cobra + a solver live in this env
@@ -608,16 +624,28 @@ workflow {
         tuple(n, contigs, file("${params.bakta_db}/version.json"))   // db-upgrade sentinel
     })
     CARVEME(BAKTA.out.map { n, gff3, faa, tsv, ffn, gbff, txt -> tuple(n, faa) })
-    MEMOTE(CARVEME.out.map { n, xml, faa, tsv -> tuple(n, xml) })
 
-    // F26/D17: one aggregate task -- the report gets one section with a row per
-    // sample, so collecting the models here mirrors that shape (cf. D15).
-    // (`_`-prefixed lambda parameters are unused by design: only the SBML path is
-    // needed, and the lint ratchet must not grow.)
+    // ---- step 9: growth check on a declared medium (F26/D17) ----------------
+    // One aggregate task -- the report gets one section with a row per sample, so
+    // collecting the models here mirrors that shape (cf. D15). `_`-prefixed lambda
+    // parameters are unused by design: only the SBML path is needed, and the lint
+    // ratchet must not grow.
     GROWTH_CHECK(
         CARVEME.out.map { _n, xml, _faa, _tsv -> xml }.collect(),
         channel.of(file(params.growth_medium)),
         channel.of(file("${params.scripts_dir}/check_growth.py"))
+    )
+
+    // ---- step 10: model quality suite (F29: AFTER the growth check) ----------
+    // Declaration order alone does not order two branches that both depend only on
+    // CARVEME, so the edge is made real: MEMOTE consumes a trigger emitted by
+    // GROWTH_CHECK. `combine` broadcasts that single value across the per-sample
+    // tuples (2 samples x 1 value), keeping one task per sample.
+    // Rationale: the growth check costs ~6 s and answers "is this model viable at
+    // all", while MEMOTE costs ~250 s per sample and scores something narrower.
+    MEMOTE(
+        CARVEME.out.map { n, xml, _faa, _tsv -> tuple(n, xml) }
+            .combine(GROWTH_CHECK.out.tsv.map { _f -> true })
     )
 
     // dependency trigger: MULTIQC waits for all upstream steps (their outputs are

@@ -13,7 +13,7 @@ bacterial isolate all the way from raw reads to a draft genome-scale metabolic m
 
 ```
 FastQC (raw) → Trimmomatic → FastQC (trimmed) → SPAdes
-             → { QUAST | BUSCO | Bakta } → CarveMe → MEMOTE → Growth check (M9) → MultiQC
+             → { QUAST | BUSCO | Bakta } → CarveMe → Growth check (M9) → MEMOTE → MultiQC
 ```
 
 | # | Step | Tool | Purpose |
@@ -22,18 +22,20 @@ FastQC (raw) → Trimmomatic → FastQC (trimmed) → SPAdes
 | 2 | Adapter/quality trimming | Trimmomatic 0.39 | clean paired reads |
 | 3 | Read QC (trimmed) | FastQC 0.12.1 | post-trim quality |
 | 4 | De novo assembly | SPAdes 4.0.0 (`--careful`) | draft genome |
-| 5 | Assembly QC | QUAST 5.2.0 | N50 / L50 / contigs / GC% |
+| 5 | Assembly QC | QUAST 5.2.0 | N50 / L50 / contigs / GC% (+ reference comparison when supplied) |
 | 6 | Completeness | BUSCO 5.8.3 | lineage completeness |
 | 7 | Annotation | Bakta 1.11.4 | GFF3 / FAA / TSV (+ AMR guard) |
 | 8 | Model reconstruction | CarveMe 1.6.6 (SCIP) | draft GEM (SBML) |
-| 9 | Model evaluation | MEMOTE 0.17.0 | model quality score |
-| 10 | Aggregate report | MultiQC 1.21 | single QC/report page |
-| 11 | Growth validation | `check_growth.py` (COBRApy) | growth on a **declared** medium — not in the original Snakemake pipeline |
+| 9 | Growth validation | `check_growth.py` (COBRApy) | growth on a **declared** medium — not in the original Snakemake pipeline |
+| 10 | Model evaluation | MEMOTE 0.17.0 | model quality score |
+| 11 | Aggregate report | MultiQC 1.21 | single QC/report page |
 
 The pipeline is a 1:1 Nextflow port of the original Snakemake implementation; the reused
-assets (conda environments, helper scripts, MultiQC config) are byte-identical copies. Step 11
+assets (conda environments, helper scripts, MultiQC config) are byte-identical copies. Step 9
 is the one addition: it closes the gap that the ported workflow never gave the models a medium
-(see *Model validation* below).
+(see *Model validation* below). It runs **before** MEMOTE on purpose — it costs seconds and
+answers the more fundamental question, so an inviable model fails fast instead of after the
+four-minute quality suite (F29).
 
 ## Requirements
 
@@ -152,8 +154,8 @@ benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
   of every sample (same isolated-`srcdoc` treatment; QUAST's page is likewise fully
   self-contained) plus its plain-text `report.txt` summary, in one *QUAST: full assembly
   reports* section placed directly after the QUAST statistics table, and
-- **reports the defined-medium growth result** as a table directly after the MEMOTE score
-  table (step 11): growth on M9 next to growth on the complete medium CarveMe ships, the
+- **reports the defined-medium growth result** as a table directly after the CarveMe model-size
+  table (step 9): growth on M9 next to growth on the complete medium CarveMe ships, the
   negative controls, and a count of failed checks. Its section configuration lives in the
   TSV's own file header, so no `sp:` entry was added to the reused config (F26), and
 - **explains its two reaction counts instead of letting them contradict each other.** The
@@ -191,7 +193,7 @@ So the medium is declared in the repository and asserted:
   via `bash tests/ci/run-growth-check.sh`.
 
 Measured on both models of the v0.1.0 cohort — and reported in every MultiQC run, as the
-*Growth on defined medium* table right below the MEMOTE table:
+*Growth on defined medium* table right below the CarveMe model-size table and above MEMOTE:
 
 | | K-12 (`SRR1770413`) | O157:H7 (`SRR10194530`) |
 |---|---|---|
