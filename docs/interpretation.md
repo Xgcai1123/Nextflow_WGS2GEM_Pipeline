@@ -37,6 +37,13 @@ If one of these is off, §5 tells you where to look. If they are all in range, t
 
 ## 2. Field guide: every table in the report
 
+> **Display convention.** Units live in the **column header**, cells carry the bare number:
+> `N50 (Kbp) | 244.8`, not `244.8 Kbp`. `scripts/strip_units.py` enforces this on the rendered
+> report — it removes a unit from a cell only when that column's header already contains it, and
+> never touches the sortable `val` attributes or the plots. Where MultiQC puts a unit *only* in
+> the cell (the MEMOTE scores, `Average Read Length`), it stays, because removing it would lose
+> information.
+
 The report has **thirteen** sections in pipeline order: ten of our own plus three embedded
 snapshots (QUAST's full report and one full MEMOTE page per sample). Two of our tables are
 *aggregate* — they mix per-file and per-sample metrics — and that is the source of most

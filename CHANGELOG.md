@@ -141,6 +141,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Report cells no longer repeat a unit the header already carries.** MultiQC renders module
+  columns as `N50 (Kbp) | 244.8 Kbp` and `% Dups | 12.9 %`; the duplication is baked into the
+  module, where one `suffix` feeds both the title and every cell (setting it empty yields
+  `N50 ()`). `scripts/strip_units.py` therefore normalises the rendered report: it removes a unit
+  from a cell only when that column's header already contains it, touches only the visible text
+  (never `val`/`data-sort`, so sorting, filtering and CSV export still see the raw numbers), and
+  is idempotent. 48 cells in the current report; `run-embed-check.sh` pins six assertions
+  (removed / kept / attribute intact / idempotent). Documented as the report's display convention
+  in `docs/interpretation.md`.
+- **Fixed: `--data-dir multiqc_data` in the MULTIQC task.** In MultiQC 1.21 `--data-dir` is a
+  boolean switch, not a path, so it swallowed the following token as an analysis directory and a
+  real run would have failed. Neither the stub smoke nor CI could catch it — the stub `stub:`
+  block replaces MULTIQC's script body, so the multiqc command never executes there. Replaying the
+  task's commands did catch it. The parsed-data directory now uses MultiQC's default
+  `<report>_data` name, published by pattern (F35).
 - **The failure-isolation test injected at the wrong entry point, so its central assertion was
   weaker than it claimed.** `FASTQC_RAW` and `TRIMMOMATIC` are parallel branches off the same
   channel, and `SPADES` depends only on `TRIMMOMATIC`, so killing a sample's `FASTQC_RAW` never

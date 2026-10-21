@@ -453,7 +453,7 @@ process MULTIQC {
     // TSVs, the intermediate staging dirs -- is a build intermediate; publishing
     // them is what made the old reports/multiqc/ look like a build directory.
     publishDir(path: { params.multiqc_dir }, pattern: 'multiqc_report*.html', mode: 'copy', overwrite: true)
-    publishDir(path: { params.multiqc_dir }, pattern: 'multiqc_data/**', mode: 'copy', overwrite: true)
+    publishDir(path: { params.multiqc_dir }, pattern: 'multiqc_report*_data/**', mode: 'copy', overwrite: true)
 
     input:
     val  report_name             // "multiqc_report" + optional tag (F19: computed in
@@ -540,14 +540,24 @@ process MULTIQC {
         qc_files="\$qc_files ${params.quast_dir}/\${s}/report.tsv"
     done
 
+    # NB: MultiQC 1.21's --data-dir is a BOOLEAN switch, not a path; the parsed
+    # data directory name is derived from -n (<report>_data). Passing a path here
+    # makes multiqc treat it as an analysis directory and fail (F35).
     # -c twice: the reused config first, the presentation overlay second.
     # ref_section may be empty (no references in this cohort) -- MultiQC accepts a
     # directory with no *_mqc.* files, so the section simply does not appear.
     multiqc \$qc_files busco_stage custom_content memote_html quast_html ref_section ${growth_section} \\
         -c ${multiqc_config} \\
         -c ${multiqc_config_extra} \\
-        -o . -f -n ${report_name} \
-        --data-dir multiqc_data \\
+        -o . -f -n ${report_name} \\
+        >> ${params.logs_dir}/multiqc.log 2>&1
+
+    # Presentation: MultiQC writes the unit into the header AND into every cell
+    # (`N50 (Kbp) | 244.8 Kbp`, `% Dups | 12.9 %`). The header is the right place;
+    # the per-cell copy is noise. This strips it from the visible text only -- the
+    # `val`/`data-sort` attributes and the plots are untouched, and a second run is
+    # a no-op (F35).
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/strip_units.py ${report_name}.html \
         >> ${params.logs_dir}/multiqc.log 2>&1
 
     bench_finish multiqc ""

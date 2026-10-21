@@ -261,4 +261,35 @@ else
     pass "ran the full structural assertion set (${ASSERTIONS} assertions)"
 fi
 
+# ---------------------------------------------------------------------------
+# scripts/strip_units.py -- the report's cosmetic post-process (F35).
+#
+# MultiQC writes the unit into the header AND into every cell; the pipeline strips
+# the duplicate from the visible text after multiqc runs. That step is tool-free,
+# so it is checked here directly rather than through a stub run (which never
+# executes MULTIQC's script body).
+# ---------------------------------------------------------------------------
+STRIP_WORK="$(mktemp -d)"
+cat > "${STRIP_WORK}/r.html" <<'HTML'
+<table><thead><tr><th>Sample Name</th><th>N50 (Kbp)</th><th>Read length</th></tr></thead>
+<tbody><tr>
+<td val="S1">S1</td>
+<td val="244.803" data-sort="244.803"><span class="val">244.8<span class='mqc_small_space'></span>Kbp</span></td>
+<td val="241"><span class="val">241<span class='mqc_small_space'></span>bp</span></td>
+</tr></tbody></table>
+HTML
+"${PYTHON}" "${PROJECT_DIR}/scripts/strip_units.py" "${STRIP_WORK}/r.html" >"${STRIP_WORK}/log1" 2>&1
+expect_eq "strip_units exits 0" "0" "$?"
+expect_grep "strip_units removed the header-duplicated unit" "1 cell unit" "${STRIP_WORK}/log1"
+grep -q '244\.8<span class=.mqc_small_space.></span>Kbp' "${STRIP_WORK}/r.html" \
+    && fail "the redundant 'Kbp' is still in the N50 cell" || pass "the redundant 'Kbp' left the cell"
+grep -q '241<span class=.mqc_small_space.></span>bp' "${STRIP_WORK}/r.html" \
+    && pass "a unit the header does NOT carry is kept (Read length | 241 bp)" \
+    || fail "strip_units removed a unit the header does not carry"
+grep -q 'val="244\.803"' "${STRIP_WORK}/r.html" \
+    && pass "the sortable val= attribute is untouched" || fail "the val= attribute was rewritten"
+"${PYTHON}" "${PROJECT_DIR}/scripts/strip_units.py" "${STRIP_WORK}/r.html" >"${STRIP_WORK}/log2" 2>&1
+expect_grep "strip_units is idempotent (second run is a no-op)" "0 cell unit" "${STRIP_WORK}/log2"
+rm -rf "${STRIP_WORK}"
+
 summary "run-embed-check"
