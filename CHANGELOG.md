@@ -133,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The failure-isolation test injected at the wrong entry point, so its central assertion was
+  weaker than it claimed.** `FASTQC_RAW` and `TRIMMOMATIC` are parallel branches off the same
+  channel, and `SPADES` depends only on `TRIMMOMATIC`, so killing a sample's `FASTQC_RAW` never
+  prevented that sample's assembly from being produced — the run simply raced the scheduler.
+  It passed locally by timing and failed on CI, which is the correct outcome for a test whose
+  assertion was passing through an empty path. The injection now poisons both entry points, which
+  is also the realistic model of a corrupt input (F32).
 - **CI: the first real workflow run failed in three of four jobs.** Two causes were
   environmental, one was a claim this project should not have made:
   - **The runner has 2 CPUs**, while `nextflow.config` declares 4–8 for the real tools, so
