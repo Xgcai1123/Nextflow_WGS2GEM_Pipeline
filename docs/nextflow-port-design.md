@@ -1102,7 +1102,7 @@ profiles {
     2. **软件版本表声称 `Snakemake 9.25.2`**,而这是 Nextflow 管线。该行来自**复用的 Snakemake 时代 `multiqc_config.yaml`(D4 字节一致)**,是遗留项;修它必须动这份复用资产(破坏字节一致、需更新 `docs/asset-sources.md` 的 sha256),因此列为**待用户决定**、未擅自修改。
   - 其余问答覆盖:QUAST `-r` 为何不可用、genome fraction 与 dnadiff 的可比性、一个样本为何在总表里出现 5 行、两个 GC 列各是什么、MEMOTE 68.1 % 不是"正确率"、表里 2486 vs 内嵌 MEMOTE 2496(cobra 读入补 10 个 exchange)、BUSCO 100 % 与 genome fraction 97.4 % 为何不矛盾、aligned contigs 30.5 % 为何不代表装配差、%Dups / %Failed 的正确读法、运行时表为何没有 5b 与生长检查、千分位空格等。
 
-- **F35 报告显示规范化:单位只在表头出现一次（用户反馈，2026-10-21）**：用户指出"表头已经写了单位(如 `N50 (Kbp)`),单元格里又写一遍 `244.8 Kbp`,不规范"。查证确认这是 **MultiQC 模块的固有行为**:模块列的 `suffix` 同时喂给标题和单元格(QUAST:`title = f"N50 ({suffix})"` + `"suffix": suffix`),把它设空只会得到 `N50 ()`;FastQC 连 suffix 配置入口都没有。替换模块表会丢掉图表与 general-stats 列,fork 模块不可维护,所以选了**窄范围后处理** `scripts/strip_units.py`:
+- **F35 报告显示规范化:单位只在表头出现一次（用户反馈，2026-10-21）**：用户指出"表头已经写了单位(如 `N50 (Kbp)`),单元格里又写一遍 `244.8 Kbp`,不规范"。查证确认这是 **MultiQC 模块的固有行为**:模块列的 `suffix` 同时喂给标题和单元格(QUAST:`title = f"N50 ({suffix})"` + `"suffix": suffix`),把它设空只会得到 `N50 ()`;FastQC 连 suffix 配置入口都没有。替换模块表会丢掉图表与 general-stats 列,fork 模块不可维护,所以选了**窄范围后处理** `scripts/strip_units.py`(F36 起升级并更名为 `scripts/normalize_report.py`,逻辑保留):
   - 只改 `<table>` 内单元格 `<span class="val">` 的**显示文本**;
   - **仅当同一列的表头已含该单位**时才删(表头没有的不动,否则等于销毁信息);
   - `val=` / `data-sort` 属性、图表、CSV 导出**一概不碰**(排序仍按原始数值);
@@ -1112,6 +1112,14 @@ profiles {
   - **留下的不一致(已记录、未擅自改)**:MEMOTE 各列的 `%` 只在单元格出现、表头没有单位;要统一必须改复用资产的列定义(D4),与 F34 的 `Snakemake 9.25.2` 同属"是否偏离 D4"的待决事项。
   - **顺带修掉一个自己引入的真 bug**:F33 里写了 `--data-dir multiqc_data`,而 MultiQC 1.21 的 `--data-dir` 是**布尔开关**(不是路径),真实运行会把 `multiqc_data` 当成 analysis directory 并失败。**stub 模式不执行 multiqc,CI 抓不到**,是重放任务命令时暴露的。已改为不传该参数(数据目录名由 `-n` 派生),publishDir 模式改为 `multiqc_report*_data/**`。
   - **教训**:`-stub-run` 覆盖的是 `script:` 块,所以**凡是只在真实运行里执行的命令都缺 CI 覆盖**;这次靠"重放"补上。以后新增这类命令,应同时加一条直接调用它的检查(embed-check 那种模式)。
+
+- **F36 表头格式统一（用户反馈，2026-10-21）**：F35 去掉"单元格重复单位"之后,用户进一步要求"**所有表头统一格式**"。把报告里 10 张可见表的表头全抽出来比对,发现 MultiQC 混用了多种约定:`Sample Name` vs `Sample`;`% Dups`(前缀百分号)vs `GC (%)`(括号后缀);`Kbp` vs `kbp`;`reactions`/`metabolites` 小写 vs `Reactions`/`Metabolites`;同一个量两个名字(`Length (Mbp)` vs `Assembly Length (Mbp)`);同一个 L50 三副面孔(`L50` / `L50 (K)` / `# contigs`);MEMOTE 的 `%` 只在单元格、表头没有单位。
+  - **定下的规范**:**`Quantity, qualifier (unit)`**;首列恒为 `Sample`;单位只出现在表头、用括号后缀;计数类不带单位;一个量只用一个名字;`%` 写成 `(%)` 而不是前缀;SI 大小写(`kbp`/`Mbp`)。
+  - **实现**:`scripts/strip_units.py` → **`scripts/normalize_report.py`**。两步:先**改表头的可见文本**(按 `table id + 原表头` 的显式映射;通用兜底:`% X`→`X (%)`、`# X`→`X`、`Sample Name`→`Sample`),再用**改名后的表头**判断单元格里是否有重复单位要删。仍然只动显示文本:`val`/`data-sort`、图表、CSV 导出输入一概不碰;**幂等**。
+  - **顺带修掉一个"数据展示"缺陷**:QUAST 模块默认把计数类列按千缩放,`L50 = 8` 显示成 `0.0 K`(F34 当时只能写进文档让读者"信另一列")。现在 overlay 设 `quast_config.total_number_contigs_multiplier: 1`,直接显示 `8.0`,表头写 `L50 (contigs)` —— 同一个数在两处显示一致。
+  - **结果**:整份报告 **27 个表头规范化 + 76 处单元格去单位**;两张表里 `N50 (kbp)`、`Assembly length (Mbp)`、`L50 (contigs)` 完全同名;`Reads GC (%)` 与 `Assembly GC (%)` 明确区分;`Mismatches / 100 kbp` 统一为 `Mismatches (per 100 kbp)`(改在 `compare_assembly_ref.py` 源头)。
+  - **CI**:`run-embed-check.sh` 直接调用脚本并断言(改名 / 百分号 / 单位后缀 / 未映射表头不动 / 排序属性完好 / 幂等)。
+  - **重要**:这一步**没有改任何 D4 复用资产** —— 展示层在渲染产物上归一化,所以 `multiqc_config.yaml`、`multiqc_extras.py` 仍与上游字节一致。这也回答了 F34/F35 留下的"D4 要不要偏离"的问题:**格式统一不再需要偏离 D4**。仍剩一项未决:`Snakemake 9.25.2` 那行属于**内容**(版本表数据)而不是**格式**,后处理不应编造版本号,是否编辑复用配置仍需用户决定。
 
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 

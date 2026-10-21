@@ -49,6 +49,17 @@
 #      another deserves the reason next to the number rather than in a doc.
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Normalise one number that MultiQC renders unreadably.
+#
+# The QUAST module scales "count of contigs" columns to thousands, so an L50 of 8
+# prints as "0.0 K" -- a value with no meaning at that precision (F34/F36). Render
+# the raw count instead; the header says it is a count, so no unit is needed.
+# -----------------------------------------------------------------------------
+quast_config:
+  total_number_contigs_multiplier: 1
+  total_number_contigs_suffix: ""
+
 report_section_order:
   # --- pipeline order (higher = earlier) ---
   fastqc:                    { order: 1000 }   # step 1/3  FastQC (raw + trimmed)

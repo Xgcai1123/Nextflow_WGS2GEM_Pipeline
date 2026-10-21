@@ -196,12 +196,12 @@ def main():
 #     max: 100
 #     format: "{:,.3f}"
 #   mismatches_per_100kbp:
-#     title: "Mismatches / 100 kbp"
+#     title: "Mismatches (per 100 kbp)"
 #     description: "Substitutions per 100 kbp of aligned assembly."
 #     min: 0
 #     format: "{:,.2f}"
 #   indels_per_100kbp:
-#     title: "Indels / 100 kbp"
+#     title: "Indels (per 100 kbp)"
 #     description: "Gap-opening events per 100 kbp of aligned assembly."
 #     min: 0
 #     format: "{:,.2f}"

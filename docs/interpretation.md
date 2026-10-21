@@ -37,12 +37,25 @@ If one of these is off, §5 tells you where to look. If they are all in range, t
 
 ## 2. Field guide: every table in the report
 
-> **Display convention.** Units live in the **column header**, cells carry the bare number:
-> `N50 (Kbp) | 244.8`, not `244.8 Kbp`. `scripts/strip_units.py` enforces this on the rendered
-> report — it removes a unit from a cell only when that column's header already contains it, and
-> never touches the sortable `val` attributes or the plots. Where MultiQC puts a unit *only* in
-> the cell (the MEMOTE scores, `Average Read Length`), it stays, because removing it would lose
-> information.
+**Header conventions.** Every column follows one shape — `Quantity, qualifier (unit)` — and the
+first column is always `Sample`. Units appear once, in the header; cells carry the bare number.
+Counts carry no unit, and `%` is written `(%)` rather than as a prefix.
+
+| rule | before (MultiQC's mix) | now |
+|---|---|---|
+| first column | `Sample Name` | `Sample` |
+| percent | `% Dups`, `% Failed` | `Duplicates (%)`, `Modules failed (%)` |
+| unit suffix | `N50 (Kbp)` + cell `244.8 Kbp` | `N50 (kbp)` + cell `244.8` |
+| unit casing | `Kbp` | `kbp`, `Mbp` (SI) |
+| one quantity, one name | `Length (Mbp)` vs `Assembly Length (Mbp)` | `Assembly length (Mbp)` |
+| counts have no unit | `L50`, `L50 (K)`, `# contigs` | `L50 (contigs)`, `Contigs` |
+| two GC columns | `% GC` vs `GC (%)` | `Reads GC (%)` vs `Assembly GC (%)` |
+| casing | `reactions`, `metabolites` | `Reactions`, `Metabolites` |
+
+`scripts/normalize_report.py` enforces this on the rendered report, so the reused MultiQC config
+stays byte-identical (D4): it rewrites the visible header text, then removes a unit from a cell
+only when that (corrected) header already carries it. The cells' sortable `val`/`data-sort`
+attributes, the plots and the CSV export inputs are never touched, and the step is idempotent.
 
 The report has **thirteen** sections in pipeline order: ten of our own plus three embedded
 snapshots (QUAST's full report and one full MEMOTE page per sample). Two of our tables are
@@ -65,18 +78,18 @@ FastQC is per *file* (four files per sample); assembly and model are per *sample
 
 | column | meaning | unit / basis | K-12 | O157:H7 |
 |---|---|---|---|---|
-| `% Dups` | share of reads that are PCR/optical duplicates | % of reads in that file | 15.0 / 14.0 raw → 14.6 / 14.1 trimmed | 12.9 / 11.6 → 12.2 / 11.8 |
-| `% GC` | GC content of the **reads** | % of bases | 50 / 49 | 50 / 50 |
-| `Average` / `Median Read Length` | read length before/after trimming | bp | 301 → 267 / 200 | 241 → 229 / 210 |
-| `% Failed` | share of FastQC *modules* that failed (not reads) | % of ~12 modules | 20 / 10 raw → 0 / 0 trimmed | 10 → 0 |
-| `M Seqs` | number of reads in millions | 10⁶ reads | 0.6 → 0.5 | 0.6 → 0.5 |
-| `N50` | contig length at the 50 % point of the assembly | kbp | 159.3 | 244.8 |
-| `Assembly Length` | total assembly size | Mbp | 4.8 | 5.4 |
-| `L50` | number of contigs needed to reach 50 % of the assembly | **count** | 11 | 8 |
-| `# contigs` | contigs in the assembly | count | 370 | 390 |
-| `GC (%)` | GC content of the **assembly** (not reads) | % of bases | 50.33 | 50.34 |
-| `reactions` / `metabolites` | size of the reconstructed model | count | 2486 / 1551 | 2478 / 1538 |
-| `MEMOTE score` | MEMOTE total score (see §2.8) | score, not a % | 68.1 | 67.8 |
+| `Duplicates (%)` | share of reads that are PCR/optical duplicates | % of reads in that file | 15.0 / 14.0 raw → 14.6 / 14.1 trimmed | 12.9 / 11.6 → 12.2 / 11.8 |
+| `Reads GC (%)` | GC content of the **reads** | % of bases | 50 / 49 | 50 / 50 |
+| `Read length, mean` / `Read length, median` | read length before/after trimming | bp | 301 → 267 / 200 | 241 → 229 / 210 |
+| `Modules failed (%)` | share of FastQC *modules* that failed (not reads) | % of ~12 modules | 20 / 10 raw → 0 / 0 trimmed | 10 → 0 |
+| `Reads (M)` | number of reads in millions | 10⁶ reads | 0.6 → 0.5 | 0.6 → 0.5 |
+| `N50 (kbp)` | contig length at the 50 % point of the assembly | kbp | 159.3 | 244.8 |
+| `Assembly length (Mbp)` | total assembly size | Mbp | 4.8 | 5.4 |
+| `L50 (contigs)` | number of contigs needed to reach 50 % of the assembly | **count** | 11 | 8 |
+| `Contigs` | contigs in the assembly | count | 370 | 390 |
+| `Assembly GC (%)` | GC content of the **assembly** (not reads) | % of bases | 50.33 | 50.34 |
+| `Reactions` / `Metabolites` | size of the reconstructed model | count | 2486 / 1551 | 2478 / 1538 |
+| `MEMOTE score (%)` | MEMOTE total score (see §2.8) | score, not a % | 68.1 | 67.8 |
 
 Coverage follows from `M Seqs`: 0.6 M reads × 2 ends × ~250 bp ≈ 300 Mbp over a 5 Mb genome ≈
 **50–60×**. That is why `# contigs` can be in the hundreds without it being a coverage problem.
@@ -98,14 +111,15 @@ heatmap. Read them as *before/after trimming* pairs:
 
 | column | meaning | unit | K-12 | O157:H7 |
 |---|---|---|---|---|
-| `N50 (Kbp)` | contig length such that contigs of that length or longer hold half the assembly | kbp | 159.3 | 244.8 |
-| `Length (Mbp)` | total assembly size | Mbp | 4.8 | 5.4 |
-| `L50 (K)` | how many contigs reach that half | count, **scaled to thousands** | 0.0 (= 11) | 0.0 (= 8) |
-| `Largest contig (Kbp)` | longest contig | kbp | 358.9 | 674.2 |
+| `N50 (kbp)` | contig length such that contigs of that length or longer hold half the assembly | kbp | 159.3 | 244.8 |
+| `Assembly length (Mbp)` | total assembly size | Mbp | 4.8 | 5.4 |
+| `L50 (contigs)` | how many contigs reach that half | count, **scaled to thousands** | 0.0 (= 11) | 0.0 (= 8) |
+| `Largest contig (kbp)` | longest contig | kbp | 358.9 | 674.2 |
 
-The `(K)` suffix on `L50` is MultiQC's own convention for count columns, not our choice: 11
-contigs is shown as `0.011 K` → `0.0`. The true integer is in General Statistics (§2.1) and in
-QUAST's `report.tsv`. **If a number looks truncated, trust the General Statistics column.**
+`L50` is a **count**, so the header says `(contigs)` and the value is rendered raw
+(`8.0` / `11.0`). The QUAST module scales count columns to thousands by default, which printed
+an L50 of 8 as `0.0 K` — meaningless at that precision. The overlay sets
+`quast_config.total_number_contigs_multiplier: 1` to stop that (F36).
 
 N50/L50 measure *contiguity*, not *correctness*. Short-read assemblies fragment; that is
 expected. Whether the sequence is right is answered by §2.4.
@@ -120,8 +134,8 @@ identity >= 95 %, alignment >= 65 bp.
 |---|---|---|---|---|
 | `Genome fraction (%)` | how much of the **reference** the assembly covers | reference length | 99.38 | 97.37 |
 | `Identity (%)` | length-weighted base agreement over aligned regions | aligned bases | 99.926 | 99.721 |
-| `Mismatches / 100 kbp` | substitutions per 100 kbp of aligned sequence | aligned bases | 67.59 | 260.56 |
-| `Indels / 100 kbp` | gap-opening events per 100 kbp | aligned bases | 5.55 | 11.33 |
+| `Mismatches (per 100 kbp)` | substitutions per 100 kbp of aligned sequence | aligned bases | 67.59 | 260.56 |
+| `Indels (per 100 kbp)` | gap-opening events per 100 kbp | aligned bases | 5.55 | 11.33 |
 | `Assembly aligned (%)` | how much of the **assembly** falls inside alignments | assembly length | 94.45 | 97.84 |
 | `Aligned contigs (%)` | share of contigs with at least one alignment | contig count | 30.54 | 96.92 |
 | `Reference (Mbp)` | length of the yardstick used | — | 4.64 | 5.59 |
@@ -176,12 +190,12 @@ The `Complete medium` column is not a growth rate — it is the artefact that mo
 
 | column | scope | ours (K-12 / O157:H7) |
 |---|---|---|
-| `Total score` | weighted score of 12 consistency + annotation tests | 68.1 / 67.8 |
-| `Consistency` | mass/charge balance, blocked reactions, loops | 44.5 / 43.8 |
-| `Annotation · metabolites` | share of metabolites with an annotation | 82.5 / 82.4 |
-| `Annotation · reactions` | share of reactions with an annotation | 77.6 / 77.6 |
-| `Annotation · genes` | share of genes with an annotation/SBO term | 33.3 / 33.3 |
-| `Annotation · SBO` | share with Systems Biology Ontology terms | 90.9 / 90.9 |
+| `Total score (%)` | weighted score of 12 consistency + annotation tests | 68.1 / 67.8 |
+| `Consistency (%)` | mass/charge balance, blocked reactions, loops | 44.5 / 43.8 |
+| `Annotation · metabolites (%)` | share of metabolites with an annotation | 82.5 / 82.4 |
+| `Annotation · reactions (%)` | share of reactions with an annotation | 77.6 / 77.6 |
+| `Annotation · genes (%)` | share of genes with an annotation/SBO term | 33.3 / 33.3 |
+| `Annotation · SBO (%)` | share with Systems Biology Ontology terms | 90.9 / 90.9 |
 
 The score is a **file-quality proxy**, not a statement about biology. The biomass, growth and
 medium tests carry weight **0** in MEMOTE 0.17.0, so they cannot move it — a high score says
@@ -246,14 +260,15 @@ table has one row per *entity*, so the same isolate appears as `SRR1770413` plus
 `_R1_paired`, `_R2_paired`. Blank cells are "not applicable at this granularity", not missing
 data. This is MultiQC's design, not a pipeline bug.
 
-**Q7. `L50` is 8 in General Statistics but `0.0 K` in the QUAST table. Which is right?**
-Both are 8 (K-12: 11). The QUAST module renders count columns scaled to thousands, so 8 becomes
-`0.008 K` and displays as `0.0`. Read the integer from General Statistics or from QUAST's
-`report.tsv`.
+**Q7. `L50` is a count — why does it print `8.0`?**
+Because MultiQC formats every numeric column with one decimal. The header says `(contigs)`, so it
+cannot be misread as a length. This column used to be worse: the QUAST module scaled counts to
+thousands, so an L50 of 8 appeared as `0.0 K`. The overlay now renders the raw count (F36).
 
-**Q8. There are two GC columns: `% GC` 50 % and `GC (%)` 50.34 %. Which one is the genome's?**
-`% GC` is the **reads** (FastQC), `GC (%)` is the **assembly** (QUAST). They agree here, which is
-the expected sanity check; a divergence would point at contamination or a wrong species.
+**Q8. There are two GC columns: `Reads GC (%)` 50 and `Assembly GC (%)` 50.34. Which is the genome's?**
+The second. `Reads GC (%)` is measured on the reads (FastQC), `Assembly GC (%)` on the assembly
+(QUAST). They agree here, which is the expected sanity check; a divergence would point at
+contamination or a wrong species.
 
 **Q9. MEMOTE total is 68.1 % — so the model is 68 % correct?**
 No. It is a weighted score over 12 consistency/annotation tests, not a fraction of anything

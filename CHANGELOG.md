@@ -202,6 +202,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every table header now follows one convention.** `Sample` as the first column,
+  `Quantity, qualifier (unit)` as the shape, units in the header only, counts unitless, and one
+  quantity under one name: 27 headers normalised and 76 cell units dropped in the current report.
+  `scripts/normalize_report.py` (successor of `strip_units.py`) rewrites the visible header text,
+  then strips a cell unit only when the corrected header carries it; `val`/`data-sort`, the plots
+  and the CSV export inputs are untouched, and the step is idempotent.
+  `quast_config.total_number_contigs_multiplier: 1` also stops L50 printing `0.0 K` for a count of
+  eight. No reused asset was edited: the display layer is normalised at render time, so the reused
+  MultiQC config stays byte-identical (F36). One item is still open — the `Snakemake 9.25.2` row in
+  the versions table is *content*, not formatting, so post-processing cannot fix it without
+  inventing a version number.
 - **The project is now self-contained: `data/` in, `results/` out, nothing else.** This project
   claimed to be standalone while its raw reads, Bakta database and BUSCO lineage still lived in the
   sibling Snakemake checkout — a structural mistake. They moved into `data/` (raw reads, `db/`,

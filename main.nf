@@ -552,12 +552,11 @@ process MULTIQC {
         -o . -f -n ${report_name} \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
-    # Presentation: MultiQC writes the unit into the header AND into every cell
-    # (`N50 (Kbp) | 244.8 Kbp`, `% Dups | 12.9 %`). The header is the right place;
-    # the per-cell copy is noise. This strips it from the visible text only -- the
-    # `val`/`data-sort` attributes and the plots are untouched, and a second run is
-    # a no-op (F35).
-    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/strip_units.py ${report_name}.html \
+    # Presentation (F35/F36): the rendered headers are normalised to one style
+    # (`Sample`, Quantity (unit), no leading %), and a cell unit that repeats the
+    # header is dropped. Visible text only -- `val`/`data-sort`, the plots and the
+    # CSV export inputs are untouched; a second run is a no-op.
+    "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/normalize_report.py ${report_name}.html \
         >> ${params.logs_dir}/multiqc.log 2>&1
 
     bench_finish multiqc ""

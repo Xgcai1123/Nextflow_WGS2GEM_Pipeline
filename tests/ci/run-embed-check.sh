@@ -262,34 +262,38 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# scripts/strip_units.py -- the report's cosmetic post-process (F35).
+# scripts/normalize_report.py -- the report's cosmetic post-process (F35/F36).
 #
-# MultiQC writes the unit into the header AND into every cell; the pipeline strips
-# the duplicate from the visible text after multiqc runs. That step is tool-free,
-# so it is checked here directly rather than through a stub run (which never
-# executes MULTIQC's script body).
+# MultiQC mixes header conventions and repeats the unit in every cell; the pipeline
+# normalises the rendered report after multiqc runs. That step lives inside MULTIQC's
+# script body, which `-stub-run` never executes, so it is checked here directly.
 # ---------------------------------------------------------------------------
-STRIP_WORK="$(mktemp -d)"
-cat > "${STRIP_WORK}/r.html" <<'HTML'
-<table><thead><tr><th>Sample Name</th><th>N50 (Kbp)</th><th>Read length</th></tr></thead>
+NORM_WORK="$(mktemp -d)"
+cat > "${NORM_WORK}/r.html" <<'HTML'
+<table id="table-general_stats_table"><thead><tr>
+<th>Sample Name</th><th>% Dups</th><th>Average Read Length</th><th>Genes</th></tr></thead>
 <tbody><tr>
-<td val="S1">S1</td>
-<td val="244.803" data-sort="244.803"><span class="val">244.8<span class='mqc_small_space'></span>Kbp</span></td>
+<th class="rowheader">S1</th>
+<td val="12.9" data-sort="12.9"><span class="val">12.9<span class='mqc_small_space'></span>%</span></td>
 <td val="241"><span class="val">241<span class='mqc_small_space'></span>bp</span></td>
+<td val="1623"><span class="val">1<span class="mqc_small_space"></span>623</span></td>
 </tr></tbody></table>
 HTML
-"${PYTHON}" "${PROJECT_DIR}/scripts/strip_units.py" "${STRIP_WORK}/r.html" >"${STRIP_WORK}/log1" 2>&1
-expect_eq "strip_units exits 0" "0" "$?"
-expect_grep "strip_units removed the header-duplicated unit" "1 cell unit" "${STRIP_WORK}/log1"
-grep -q '244\.8<span class=.mqc_small_space.></span>Kbp' "${STRIP_WORK}/r.html" \
-    && fail "the redundant 'Kbp' is still in the N50 cell" || pass "the redundant 'Kbp' left the cell"
-grep -q '241<span class=.mqc_small_space.></span>bp' "${STRIP_WORK}/r.html" \
-    && pass "a unit the header does NOT carry is kept (Read length | 241 bp)" \
-    || fail "strip_units removed a unit the header does not carry"
-grep -q 'val="244\.803"' "${STRIP_WORK}/r.html" \
+"${PYTHON}" "${PROJECT_DIR}/scripts/normalize_report.py" "${NORM_WORK}/r.html" >"${NORM_WORK}/log1" 2>&1
+expect_eq "normalize_report exits 0" "0" "$?"
+expect_grep "normalize_report renamed headers and dropped cells" "3 header(s) normalised, 2 cell unit" "${NORM_WORK}/log1"
+grep -q '>Sample<' "${NORM_WORK}/r.html" && pass "Sample Name -> Sample" || fail "Sample Name was not renamed"
+grep -q '>Duplicates (%)<' "${NORM_WORK}/r.html" && pass "% Dups -> Duplicates (%)" || fail "% Dups was not renamed"
+grep -q '>Read length, mean (bp)<' "${NORM_WORK}/r.html" && pass "Average Read Length -> (bp) suffix" || fail "read length header not normalised"
+grep -q '>Genes<' "${NORM_WORK}/r.html" && pass "an unmapped header is left alone (Genes)" || fail "an unmapped header was rewritten"
+grep -q '12\.9<span class=.mqc_small_space.></span>%' "${NORM_WORK}/r.html" \
+    && fail "the redundant '%' is still in the Dups cell" || pass "the redundant '%' left the Dups cell"
+grep -q '241<span class=.mqc_small_space.></span>bp' "${NORM_WORK}/r.html" \
+    && fail "the 'bp' unit survived despite the header carrying it" || pass "bp removed once the header carries it"
+grep -q 'val="12\.9"' "${NORM_WORK}/r.html" \
     && pass "the sortable val= attribute is untouched" || fail "the val= attribute was rewritten"
-"${PYTHON}" "${PROJECT_DIR}/scripts/strip_units.py" "${STRIP_WORK}/r.html" >"${STRIP_WORK}/log2" 2>&1
-expect_grep "strip_units is idempotent (second run is a no-op)" "0 cell unit" "${STRIP_WORK}/log2"
-rm -rf "${STRIP_WORK}"
+"${PYTHON}" "${PROJECT_DIR}/scripts/normalize_report.py" "${NORM_WORK}/r.html" >"${NORM_WORK}/log2" 2>&1
+expect_grep "normalize_report is idempotent (second run is a no-op)" "0 header(s) normalised, 0 cell unit" "${NORM_WORK}/log2"
+rm -rf "${NORM_WORK}"
 
 summary "run-embed-check"
