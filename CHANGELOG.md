@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`docs/interpretation.md` is now a field guide plus a reviewer Q&A.** Section 2 documents every
+  column of every table in the report — unit, denominator, this project's value, and how to judge
+  it — and section 3 answers the twenty questions that actually come up. Two of them are cases
+  where the report itself is misleading: `L50` renders as `0.0 K` in the QUAST table while General
+  Statistics shows the integer (MultiQC scales count columns, and a config overlay cannot change a
+  module's scale), and the software-versions table still claims `Snakemake 9.25.2` because it comes
+  from the reused Snakemake-era config (D4). The README keeps a single link rather than growing
+  (F34).
 - **`docs/interpretation.md` — a reader's guide to the numbers.** Metric by metric: what it
   means, when it indicates a problem, and what it does not license you to conclude. Includes the
   three traps that look right and are not (the 66 h⁻¹ complete-medium artefact, the growth rate's

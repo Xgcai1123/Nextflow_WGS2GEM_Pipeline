@@ -1,15 +1,20 @@
 # Reading the results
 
-What every number in this pipeline means, when it indicates a problem, and — more importantly —
-what it does **not** license you to conclude. Written for the person who runs the pipeline and
-then has to explain the output to someone else.
+A field guide to `results/report/multiqc_report.html`: what every table, column and number means,
+where it comes from, when it indicates a problem — and what it does **not** license you to
+conclude.
+
+Written from a reviewer's point of view. §2 answers "what is this column?"; §3 answers the
+questions people actually ask when they look at the report and something looks off.
 
 Reference points throughout are this project's two validation isolates:
 
 | | SRR1770413 | SRR10194530 |
 |---|---|---|
 | organism / strain | *E. coli* K-12 | *E. coli* O157:H7 |
-| reference used | GCA_000005845.2 (MG1655) | GCA_000008865.2 (Sakai) |
+| reference used | GCA_000005845.2 (MG1655, 4.64 Mbp) | GCA_000008865.2 (Sakai, 5.59 Mbp) |
+| reads | 2 × ~0.6 M, 301 bp | 2 × ~0.6 M, 241 bp |
+| assembly | 370 contigs, 4.84 Mbp, N50 159 kbp | 390 contigs, 5.40 Mbp, N50 245 kbp |
 
 ---
 
@@ -25,108 +30,290 @@ Exit code 0, `results/report/multiqc_report.html` written, and per sample roughl
 | biomass yield | 0.3–0.7 g/g glucose | 0.53 g/g |
 | MEMOTE total | 60–75 for a draft | 68.1 / 67.8 |
 
-If one of these is off, §4 tells you where to look. If they are all in range, the run is
-*plausible* — not *validated*. §3 explains the difference.
+If one of these is off, §5 tells you where to look. If they are all in range, the run is
+*plausible* — not *validated*. §4 explains the difference.
 
 ---
 
-## 2. Metric by metric
+## 2. Field guide: every table in the report
 
-### Step 1 / 3 — FastQC (raw and trimmed)
+The report has **thirteen** sections in pipeline order: ten of our own plus three embedded
+snapshots (QUAST's full report and one full MEMOTE page per sample). Two of our tables are
+*aggregate* — they mix per-file and per-sample metrics — and that is the source of most
+confusion, so it is explained first.
 
-| metric | read it as | investigate when |
+### 2.1 General Statistics (the table at the top)
+
+Fifteen columns, and **five rows per isolate**. The rows exist because the metrics have different
+granularity:
+
+| row | comes from | populated columns |
 |---|---|---|
-| per-base quality | should stay above ~28 across the read | a tail dropping below ~20 → trimming is doing real work, check what survived |
+| `SRR1770413` | QUAST + CarveMe + MEMOTE | N50, Assembly Length, L50, # contigs, GC (%), reactions, metabolites, MEMOTE score |
+| `SRR1770413_1`, `_2` | FastQC on the **raw** read files | % Dups, % GC, read length, % Failed, M Seqs |
+| `SRR1770413_R1_paired`, `_R2_paired` | FastQC on the **trimmed** read files | same five |
+
+So a cell is blank when that metric does not exist at that granularity — not because it failed.
+FastQC is per *file* (four files per sample); assembly and model are per *sample*.
+
+| column | meaning | unit / basis | K-12 | O157:H7 |
+|---|---|---|---|---|
+| `% Dups` | share of reads that are PCR/optical duplicates | % of reads in that file | 15.0 / 14.0 raw → 14.6 / 14.1 trimmed | 12.9 / 11.6 → 12.2 / 11.8 |
+| `% GC` | GC content of the **reads** | % of bases | 50 / 49 | 50 / 50 |
+| `Average` / `Median Read Length` | read length before/after trimming | bp | 301 → 267 / 200 | 241 → 229 / 210 |
+| `% Failed` | share of FastQC *modules* that failed (not reads) | % of ~12 modules | 20 / 10 raw → 0 / 0 trimmed | 10 → 0 |
+| `M Seqs` | number of reads in millions | 10⁶ reads | 0.6 → 0.5 | 0.6 → 0.5 |
+| `N50` | contig length at the 50 % point of the assembly | kbp | 159.3 | 244.8 |
+| `Assembly Length` | total assembly size | Mbp | 4.8 | 5.4 |
+| `L50` | number of contigs needed to reach 50 % of the assembly | **count** | 11 | 8 |
+| `# contigs` | contigs in the assembly | count | 370 | 390 |
+| `GC (%)` | GC content of the **assembly** (not reads) | % of bases | 50.33 | 50.34 |
+| `reactions` / `metabolites` | size of the reconstructed model | count | 2486 / 1551 | 2478 / 1538 |
+| `MEMOTE score` | MEMOTE total score (see §2.8) | score, not a % | 68.1 | 67.8 |
+
+Coverage follows from `M Seqs`: 0.6 M reads × 2 ends × ~250 bp ≈ 300 Mbp over a 5 Mb genome ≈
+**50–60×**. That is why `# contigs` can be in the hundreds without it being a coverage problem.
+
+### 2.2 FastQC
+
+Per-file plots: per-base quality, per-sequence quality, GC distribution, N content, length
+distribution, duplication, over-represented sequences, adapter content, and a status-check
+heatmap. Read them as *before/after trimming* pairs:
+
+| what | read it as | investigate when |
+|---|---|---|
+| per-base quality | should stay above ~28 across the read | a tail dropping below ~20 → the trimming step is doing real work |
 | adapter content | high in raw is normal | still high in *trimmed* → Trimmomatic's adapter list missed this library |
-| over-represented sequences | a few are normal | a single sequence at >1 % of reads → contamination or PCR duplicates |
+| over-represented sequences | a few are normal | one sequence at >1 % of reads → contamination or PCR duplicates |
+| status checks | `% Failed` above | a *cluster* of failures in trimmed reads |
 
-The pair of reports exists so you can see the *effect* of step 2, not just its success.
+### 2.3 QUAST
 
-### Step 2 — Trimmomatic
+| column | meaning | unit | K-12 | O157:H7 |
+|---|---|---|---|---|
+| `N50 (Kbp)` | contig length such that contigs of that length or longer hold half the assembly | kbp | 159.3 | 244.8 |
+| `Length (Mbp)` | total assembly size | Mbp | 4.8 | 5.4 |
+| `L50 (K)` | how many contigs reach that half | count, **scaled to thousands** | 0.0 (= 11) | 0.0 (= 8) |
+| `Largest contig (Kbp)` | longest contig | kbp | 358.9 | 674.2 |
 
-Surviving reads are the honest denominator for everything downstream: if 40 % of reads are
-discarded, a low BUSCO score is a data problem, not an assembly problem. This project's
-settings (`LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:36`) are the original pipeline's,
-kept verbatim.
+The `(K)` suffix on `L50` is MultiQC's own convention for count columns, not our choice: 11
+contigs is shown as `0.011 K` → `0.0`. The true integer is in General Statistics (§2.1) and in
+QUAST's `report.tsv`. **If a number looks truncated, trust the General Statistics column.**
 
-### Step 4 / 5 — SPAdes and QUAST
+N50/L50 measure *contiguity*, not *correctness*. Short-read assemblies fragment; that is
+expected. Whether the sequence is right is answered by §2.4.
 
-| metric | read it as | investigate when |
+### 2.4 Assembly vs reference genome (step 5b)
+
+Present only when the sample sheet supplies a `reference`. Our own BLASTN comparison (QUAST's
+own reference mode is unusable on arm64 — see §3, Q1). Thresholds are QUAST's defaults:
+identity >= 95 %, alignment >= 65 bp.
+
+| column | meaning | denominator | K-12 | O157:H7 |
+|---|---|---|---|---|
+| `Genome fraction (%)` | how much of the **reference** the assembly covers | reference length | 99.38 | 97.37 |
+| `Identity (%)` | length-weighted base agreement over aligned regions | aligned bases | 99.926 | 99.721 |
+| `Mismatches / 100 kbp` | substitutions per 100 kbp of aligned sequence | aligned bases | 67.59 | 260.56 |
+| `Indels / 100 kbp` | gap-opening events per 100 kbp | aligned bases | 5.55 | 11.33 |
+| `Assembly aligned (%)` | how much of the **assembly** falls inside alignments | assembly length | 94.45 | 97.84 |
+| `Aligned contigs (%)` | share of contigs with at least one alignment | contig count | 30.54 | 96.92 |
+| `Reference (Mbp)` | length of the yardstick used | — | 4.64 | 5.59 |
+
+Two different denominators, and that is the point: `Genome fraction` answers "did I recover it?",
+`Assembly aligned` answers "is what I built supported?". `Aligned contigs` is a *shape* metric —
+see Q13 in §3.
+
+### 2.5 BUSCO
+
+A bar plot of the 440 Enterobacterales markers (`enterobacterales_odb10`):
+
+| segment | meaning | ours |
 |---|---|---|
-| `# contigs` (>= 1000 bp) | fragmentation of the draft | hundreds of contigs is normal for short reads; it is *not* a failure |
-| N50 / L50 | contiguity | N50 in the tens of kb is expected here, not megabases — short reads do not close genomes |
-| Total length | compare with the expected genome size | `> 1.1x` expected → duplicated regions or contamination; `< 0.9x` → under-assembly |
-| GC (%) | compare with the reference's GC | a difference above ~2 percentage points suggests the wrong organism or a contaminated sample |
+| `C` complete | markers found at full length (S + D) | 440/440 = 100 % |
+| `S` single-copy | found exactly once | 438 |
+| `D` duplicated | found more than once | 2 |
+| `F` fragmented | partially found | 0 |
+| `M` missing | not found | 0 |
 
-QUAST reports `GC (%)` and, when a reference is supplied to QUAST itself, `Reference GC (%)`.
-Note this pipeline does **not** use QUAST's reference mode (see §3.3); the reference comparison
-is its own step with its own section.
+Completeness is *gene presence*, not sequence correctness: a chimeric assembly can still be
+100 % complete. That is what §2.4 is for.
 
-### Step 6 — BUSCO
+### 2.6 CarveMe
 
-| metric | read it as | investigate when |
+| column | meaning | ours (K-12 / O157:H7) |
 |---|---|---|
-| `C` complete | share of the 440 Enterobacterales markers found | `< 90 %` → incomplete assembly, or the wrong lineage (`--busco_lineage`) |
-| `S` single-copy vs `D` duplicated | `D` above ~5 % suggests a duplicated genome, a mixed culture, or a very fragmented assembly | high `D` |
-| `F` fragmented / `M` missing | which genes are absent | a cluster of missing genes → real deletion or a coverage gap |
+| `Reactions` | reactions in the SBML draft | 2486 / 2478 |
+| `Metabolites` | metabolites | 1551 / 1538 |
+| `Genes` | genes with a GPR association | 1623 / 1609 |
+| `Compartments` | compartments (cytosol, periplasm, extracellular) | 3 / 3 |
 
-BUSCO completeness is *gene presence*, not correctness: a chimeric assembly can still be 100 %
-complete. That is what the reference comparison is for.
+Drafts are incomplete by construction: CarveMe builds from the annotation, so a missing gene
+becomes a missing reaction. Compare with a published model of the same species, not with an
+absolute threshold. See Q10 for why the embedded MEMOTE report shows 10 more reactions.
 
-### Step 7 — Bakta
+### 2.7 Growth on defined medium (step 9)
 
-CDS/tRNA/rRNA counts are a sanity check on the annotation, not a quality score. A CDS count far
-from `genome size / ~950 bp` means gene calling went wrong. The AMR guard reports resistance
-hits: absence is not evidence of susceptibility (the database is incomplete), and presence is
-not evidence of resistance (a silent or truncated gene still matches).
-
-### Step 8 — CarveMe
-
-Reaction/metabolite/gene counts describe the **draft**, and drafts are incomplete by
-construction: CarveMe builds from the annotation, so a missing gene becomes a missing reaction,
-which becomes a gap-filled or absent pathway. Compare with a published model of the same
-species, not with an absolute threshold. This project: 2486/1551/1623 and 2478/1538/1609
-(reactions/metabolites/genes), 3 compartments.
-
-### Step 9 — growth on the declared medium
-
-| quantity | read it as | investigate when |
+| column | meaning | ours (both) |
 |---|---|---|
-| growth rate (h⁻¹) | maximum biomass flux under the declared medium | `0.000` → no carbon source reaching the cell, or the medium does not map onto the model (the task fails with exit 2 if a compound cannot be mapped) |
-| `> 2.81 h⁻¹` | physically impossible (fastest known bacterium) | always — that is the bound the checker asserts |
-| yield (gDW per g substrate) | how much biomass per gram of carbon | outside 0.3–0.7 for glucose → the biomass equation is probably wrong |
-| the "complete medium" row | ~66 h⁻¹ for a CarveMe draft | **expected**, not a finding — see §3.1 |
+| `Growth on M9 (1/h)` | maximum biomass flux on the declared medium | 0.953 |
+| `Complete medium (1/h)` | the same model with **all 342 exchanges open** | 66.000 / 66.001 |
+| `No carbon source (1/h)` | negative control, must be 0 | 0.000 |
+| `Anaerobic (1/h)` | negative control, must be lower | 0.228 |
+| `Yield (gDW/g)` | biomass per gram of the carbon source | 0.529 |
+| `Failed checks` | how many of the checker's assertions failed | 0 |
 
-The rate is **conditional on the medium's uptake bounds** (§3.2). The yield is the robust
-number; prefer it when you need to make a claim.
+The `Complete medium` column is not a growth rate — it is the artefact that motivated this step
+(§3.1). The **rate** depends on the medium's uptake bounds; the **yield** does not (§3.2).
 
-### Step 10 — MEMOTE
+### 2.8 MEMOTE (step 10)
 
-| score | scope | read it as |
+| column | scope | ours (K-12 / O157:H7) |
 |---|---|---|
-| total | 12 weighted tests: stoichiometric consistency + annotation | a *code-quality* proxy for the model file, not a statement about biology |
-| consistency | mass/charge balance, blocked reactions, loops | `< 40 %` → the network has real problems |
-| annotation | metabolite/reaction/gene annotation and SBO terms | depends on the databases, not on your data |
+| `Total score` | weighted score of 12 consistency + annotation tests | 68.1 / 67.8 |
+| `Consistency` | mass/charge balance, blocked reactions, loops | 44.5 / 43.8 |
+| `Annotation · metabolites` | share of metabolites with an annotation | 82.5 / 82.4 |
+| `Annotation · reactions` | share of reactions with an annotation | 77.6 / 77.6 |
+| `Annotation · genes` | share of genes with an annotation/SBO term | 33.3 / 33.3 |
+| `Annotation · SBO` | share with Systems Biology Ontology terms | 90.9 / 90.9 |
 
-Crucially: the biomass/growth/medium tests carry weight **0** in MEMOTE 0.17.0, so they cannot
-move the score. A high MEMOTE score says nothing about whether the model grows. That is why
-step 9 exists.
+The score is a **file-quality proxy**, not a statement about biology. The biomass, growth and
+medium tests carry weight **0** in MEMOTE 0.17.0, so they cannot move it — a high score says
+nothing about whether the model grows. That is why step 9 exists.
 
-### Step 5b — assembly vs reference genome
+### 2.9 Per-step runtimes
 
-| metric | read it as | investigate when |
-|---|---|---|
-| genome fraction | share of the reference recovered by the assembly | `< 90 %` → wrong strain, contamination, or missing regions |
-| identity | length-weighted identity over accepted alignments | `< 99 %` → wrong strain or a low-quality assembly |
-| mismatches / 100 kbp | substitutions per 100 kbp aligned | `> 500` → likely a different strain rather than sequencing error |
-| indels / 100 kbp | gap-opening events | `> 50` → assembly indel errors (short-read homopolymer trouble) |
-| aligned contigs | share of contigs with any alignment | low with high genome fraction is *fine*: a few large contigs carry the genome and the rest are tiny |
+Wall time in seconds per step, per sample, plus an `all samples` row for the cohort-level
+MultiQC step. Two steps are deliberately absent: the growth check and the reference comparison.
+They write no benchmark record, because `benchmarks/` is the Snakemake step set and an unknown
+label would appear in this table as a raw column name (F26/F30). Their cost is seconds; the log
+timestamps are the record.
+
+### 2.10 Software versions
+
+Tool and version for everything that ran. One entry is a known wart: **`Snakemake 9.25.2`**.
+This table comes from the reused Snakemake-era MultiQC config (D4: byte-identical), and that row
+is a leftover — this is a Nextflow pipeline (see Q18).
 
 ---
 
-## 3. Three things that look right and are not
+## 3. Questions a reviewer will ask
 
-### 3.1 The 66 h⁻¹ "growth rate"
+These are the ones that actually come up. Short answers, with where to find the evidence.
+
+### Method
+
+**Q1. Why didn't you just run QUAST's reference mode (`-r`)?**
+We tried. QUAST 5.2 compiles a bundled minimap2 on first use, and on arm64 macOS that compile
+fails (`-msse2`, `-mfpu=` are x86/Linux flags). QUAST then only *warns* and silently falls back
+to reference-independent statistics — a comparison that is not one. It also has no hook for an
+external aligner. So the comparison is its own step with BLASTN from the pinned Bakta
+environment, at QUAST's default thresholds. QUAST's own output therefore stays byte-identical to
+the original pipeline (F30/D20).
+
+**Q2. Are these genome-fraction numbers comparable to dnadiff/QUAST's?**
+Conceptually yes, and the thresholds match (identity >= 95 %, alignment >= 65 bp). The aligner
+differs (BLASTN vs minimap2/nucmer), so expect differences in the last percent — treat
+`99.38 %` as "essentially complete", not as a value to compare with a published 99.4 %.
+
+**Q3. Why these two references? What if the isolate is another strain?**
+The reference is a **yardstick**, not a truth claim. A different strain of the same species
+lowers `Genome fraction` and raises `Mismatches` — which is a finding, not a failure (Q12). The
+pipeline fails only when a reference matches *nothing* (exit 2), so a wrong file cannot quietly
+produce a table of zeroes.
+
+**Q4. Why are the growth rates identical for two different strains?**
+Both models share CarveMe's template biomass equation and the same declared medium, so the
+optimum is set by the medium and the template, not by the isolate. The number is reproducible,
+not strain-discriminating. Do not use it to compare isolates.
+
+**Q5. Why is there a 66 h⁻¹ column at all?**
+Because it is the number that would have been reported as "growth" if nobody declared a medium.
+It is CarveMe's complete medium (all 342 exchanges open): the cell imports every amino acid,
+nucleotide, vitamin and metal, so the objective measures assembly speed, not growth (§3.1).
+
+### Numbers that look contradictory
+
+**Q6. Why does one sample appear as five rows, with blank cells?**
+FastQC runs per FASTQ file (four per sample), assembly/model steps run per sample. The aggregate
+table has one row per *entity*, so the same isolate appears as `SRR1770413` plus `_1`, `_2`,
+`_R1_paired`, `_R2_paired`. Blank cells are "not applicable at this granularity", not missing
+data. This is MultiQC's design, not a pipeline bug.
+
+**Q7. `L50` is 8 in General Statistics but `0.0 K` in the QUAST table. Which is right?**
+Both are 8 (K-12: 11). The QUAST module renders count columns scaled to thousands, so 8 becomes
+`0.008 K` and displays as `0.0`. Read the integer from General Statistics or from QUAST's
+`report.tsv`.
+
+**Q8. There are two GC columns: `% GC` 50 % and `GC (%)` 50.34 %. Which one is the genome's?**
+`% GC` is the **reads** (FastQC), `GC (%)` is the **assembly** (QUAST). They agree here, which is
+the expected sanity check; a divergence would point at contamination or a wrong species.
+
+**Q9. MEMOTE total is 68.1 % — so the model is 68 % correct?**
+No. It is a weighted score over 12 consistency/annotation tests, not a fraction of anything
+physical. Two weights are structurally zero (biomass/growth/medium tests), and annotation scores
+depend on the databases rather than on your data. Use it to compare drafts, not to claim
+correctness.
+
+**Q10. The table says 2486 reactions, the embedded MEMOTE report says 2496. Which is wrong?**
+Neither. COBRApy creates 10 exchange reactions on load for metabolites that have none in the
+file (here: `na1`, `ni2`, `cd2`, `cm`, `hg2`, `fusa`, `gbbtn`, `novbcn`, `doxrbcn`, `ttrcyc`).
+The SBML on disk has 2486; MEMOTE sees 2496. Both counts are correct for their own object
+(F27). If you quote one, say which.
+
+**Q11. BUSCO says 100 % complete, but genome fraction is 97.4 %. Contradiction?**
+No. BUSCO asks "are the 440 conserved genes present?", genome fraction asks "how much of the
+reference sequence did I recover?". A complete gene set can sit on an assembly that is missing
+accessory regions — which is exactly the O157:H7 case.
+
+**Q12. 440/440 complete yet 2 duplicates — is that a contaminated sample?**
+`D = 2` means two markers occur more than once; the complete count still includes them. Two is
+within normal variation for short-read assemblies and does not by itself indicate a mixed
+culture. High `D` (say > 5 %, i.e. > 20 markers) would.
+
+**Q13. Only 30.5 % of the K-12 contigs align — is the assembly bad?**
+No, and this is the most misread number in the report. Those 113 aligned contigs carry 94.5 % of
+the assembly's bases; the remaining ~257 are tiny fragments (often below the 65 bp alignment
+threshold). Read `Genome fraction` (99.38 %) for completeness and ignore the contig share.
+
+**Q14. `% Dups` 12–15 % — is that high?**
+It is normal for short-read libraries and does not affect the assembly conclusions; it inflates
+apparent coverage slightly. Compare raw vs trimmed: our trimming does not change it, which is
+expected (duplicates are mostly PCR artefacts, not adapters).
+
+**Q15. `% Failed` 10–20 % — did 20 % of the reads fail?**
+No. That number is the share of FastQC *modules* (per-base quality, adapter content, …) that
+failed for that file. It drops to 0 % after trimming, which is the useful signal.
+
+**Q16. Assembly length 5.40 Mbp vs reference 5.59 Mbp, yet genome fraction is 97.4 % — consistent?**
+Yes: 97.4 % of 5.59 Mbp ≈ 5.45 Mbp of the reference is covered. The assembly is *shorter* than
+the reference because it lacks ~190 kbp of accessory/plasmid sequence present in Sakai (and has
+a little extra of its own). Consistent coverage of a shorter genome is exactly what a different
+strain looks like.
+
+**Q17. Why are the growth check and the reference comparison missing from the runtime table?**
+They write no `benchmarks/` record: that directory is the Snakemake step set, and an unknown
+label would surface as a raw column. Their measured cost is seconds; the log timestamps are the
+record (F26/F30).
+
+**Q18. The version table lists Snakemake 9.25.2 — isn't this a Nextflow pipeline?**
+Yes, it is. That row is a leftover from the reused Snakemake-era MultiQC config (kept
+byte-identical on purpose, D4). The `benchmarks/` format is Snakemake's, which is why the config
+mentions it. Treat the row as documentation of the benchmark format, not of the engine; the
+engine is Nextflow (see the run header, `Nextflow >= 25.10`). F33 records this as a known wart.
+
+**Q19. Why do the numbers contain spaces, e.g. `2 486`?**
+MultiQC's thousand separator. `2 486` = 2486.
+
+**Q20. `Annotation · genes` is 33.3 % for both models — is that a red flag?**
+It is a property of CarveMe drafts, not of your data: gene-associated annotations and SBO terms
+are sparse in reconstructed models. It is identical across the two isolates because both came
+through the same reconstruction path. It does not affect the growth or reference results.
+
+---
+
+## 4. Three things that look right and are not
+
+### 4.1 The 66 h⁻¹ "growth rate"
 
 CarveMe ships every draft with all exchange reactions open — a complete medium in which amino
 acids, nucleotides, vitamins and metals are all importable. FBA on that medium measures how fast
@@ -137,7 +324,7 @@ visible in the ported pipeline's own MEMOTE output (`test_biomass_default_produc
 A growth rate is meaningless without a medium. That is the entire reason step 9 exists: it
 declares a medium (`media/m9_aerobic.yaml`) and reports against it.
 
-### 3.2 The growth rate depends on the uptake bound you choose
+### 4.2 The growth rate depends on the uptake bound you choose
 
 The medium file sets uptake **bounds** (mmol·gDW⁻¹·h⁻¹), which are not the same thing as a
 laboratory recipe in mM. Measured sensitivity for SRR1770413 on M9:
@@ -154,9 +341,9 @@ So "0.953 h⁻¹" is a **carbon-limited rate under a stated convention**, not a 
 robust quantity is the **yield** — 95 gDW/mol glucose ≈ 0.53 g/g — because it is the model's
 biomass stoichiometry and does not move when the uptake bound changes. Anchoring plausibility on
 the yield (against ~0.5 g/g measured for *E. coli* on glucose minimal medium) is therefore the
-stronger claim; the checker now asserts both.
+stronger claim; the checker asserts both.
 
-### 3.3 A low genome fraction does not mean a broken assembly
+### 4.3 A low genome fraction does not mean a broken assembly
 
 Sakai is one O157:H7 isolate. This project's O157:H7 sample recovers 97.4 % of it at 99.72 %
 identity with a four-fold higher mismatch rate than the K-12 sample — the signature of a
@@ -165,22 +352,20 @@ pipeline therefore fails only when a reference matches *nothing* (exit 2); a par
 reported, and interpreting it is your job. If you need a tighter comparison, use a reference of
 the same strain.
 
-Related: QUAST's own `-r` is deliberately not used. On arm64 macOS its bundled minimap2 does
-not compile (`-msse2`, `-mfpu=`), after which QUAST *warns* and silently reports
-reference-independent statistics — a reference comparison that is not one. Step 5b replaces it.
+Related: QUAST's own `-r` is deliberately not used (Q1). Step 5b replaces it.
 
 ---
 
-## 4. Troubleshooting
+## 5. Troubleshooting
 
 | symptom | most likely cause | confirm with | fix |
 |---|---|---|---|
 | growth `0.000` | medium compound not mapped to the model, or the carbon source is absent | `logs/growth/growth_check.log` — it names unmappable compounds | fix the medium YAML or the exchange id |
 | growth task exits 2 | a medium component has no exchange reaction in the model | the log's message (structural, not biological) | correct the medium, or use a medium for this organism |
-| growth above the physical bound | bounds too generous / medium accidental | the medium's `components` | tighten the carbon bound (§3.2) |
+| growth above the physical bound | bounds too generous / medium accidental | the medium's `components` | tighten the carbon bound (§4.2) |
 | BUSCO `< 90 %` | wrong lineage or fragmented assembly | `short_summary.*.txt`, QUAST N50 | set `--busco_lineage`, or fix the reads |
 | BUSCO `D` high | duplicated genome / mixed culture | QUAST total length vs expected | re-check the sample; consider a different isolate |
-| genome fraction low | reference of a different strain | §3.3, Bakta species markers | use a same-strain reference |
+| genome fraction low | reference of a different strain | Q3/Q12, Bakta species markers | use a same-strain reference |
 | refcompare task exits 2 | reference does not match the assembly at all | `logs/refcompare/<sample>.log` | wrong file in the sheet, or the sample is not the organism claimed |
 | run aborts before any task, mentions GiB | disk pre-flight (F20) | the message names the volume and the cleanup commands | free space or `--min_free_disk_gb=0` |
 | MEMOTE crashes | MEMOTE 0.17.0 bugs (e.g. `test_find_medium_metabolites`) | `logs/memote/<sample>.log` | known; the port keeps the original invocation |
@@ -188,7 +373,7 @@ reference-independent statistics — a reference comparison that is not one. Ste
 
 ---
 
-## 5. What changing a parameter does
+## 6. What changing a parameter does
 
 | parameter | effect |
 |---|---|
@@ -197,27 +382,19 @@ reference-independent statistics — a reference comparison that is not one. Ste
 | `quast_min_contig` | changes how many contigs QUAST counts, not the assembly |
 | `busco_lineage` | changes which markers are scored **and the output filenames the report looks for** |
 | `carveme_solver`, `memote_solver` | solver choice; results should agree, speeds differ |
-| medium `components` bounds | growth rate (strongly — see §3.2), yield (not) |
+| medium `components` bounds | growth rate (strongly — see §4.2), yield (not) |
 | `report_tag` | filename of the report only; lets two runs coexist |
 | `reference` column | adds a comparison; absent → no task, no section |
 
 ---
 
-## 6. Navigating the report
+## 7. Reading the embedded reports
 
-Sections appear in pipeline order, so the report reads like the workflow:
+Two sections embed other people's HTML: QUAST's interactive assembly report (`.report.html`) and
+each sample's full MEMOTE snapshot. Both pages carry their own CSS and JavaScript, so they are
+wrapped in isolated `srcdoc` iframes — they cannot affect the report around them, and a missing
+embedded page is a warning rather than a crashed report.
 
-1. **FastQC** — raw and trimmed side by side.
-2. **QUAST: assembly QC** — contiguity and size.
-3. **Assembly vs reference** — only when a reference was supplied (§2, step 5b).
-4. **QUAST: full reports** — QUAST's own interactive page, embedded.
-5. **BUSCO** — completeness and duplication.
-6. **CarveMe: draft model size** — what was reconstructed.
-7. **Growth on defined medium** — the viability check, with the complete-medium artefact beside it.
-8. **MEMOTE: model quality** — the scorecard, with its scope caveat.
-9. **MEMOTE: full reports** — the complete per-sample MEMOTE pages, embedded.
-10. **Per-step runtimes** and **software versions** — provenance for the run.
-
-The embedded MEMOTE and QUAST pages are isolated in `srcdoc` iframes: they bring their own CSS
-and JavaScript, so they cannot affect the report around them. A missing embedded page is a
-warning, not a crashed report.
+The embedded pages are the *original* outputs. When a number differs from the summary table, the
+summary is our extraction of a specific field and the embedded page is the full document — Q10 is
+the one case where both are right, and §2.10 is the one known wart.

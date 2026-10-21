@@ -1096,6 +1096,12 @@ profiles {
   - **取舍(显式)**:不再镜像 Snakemake 的输出树。内容仍逐字节可比,**只有路径变了**;README 里"intentionally mirrors the original Snakemake layout"这句话已改写。这是 D23。
   - **验证**:7 个本地检查全绿;CI stub 25 任务;`tests/ci/out` 顶层只剩 `results/` 与 `work/`(此前是散的五类目录);CI 运行后真实 `results/` 与 `data/` **未被触碰**。
 
+- **F34 报告可解释性审计:把"审稿人会问什么"变成文档（用户要求，2026-10-21）**：用户把"这些参数是什么意思 / 为什么没让 QUAST 跑参考模式"当作**学术工作者会问的典型问题**,要求带着这种眼光把整个 MultiQC 报告过一遍,找出所有会引起疑问的地方、给出答案并落盘(README 不扩容)。产出:把 `docs/interpretation.md` 从"指标说明"扩成 **字段手册 + 问答**——§2 覆盖报告里每张表的每一列(单位 / 分母 / 我们的值 / 怎么判断),§3 是 **20 条 Q&A**,分"方法""看起来矛盾的数""溯源"。
+  - **审计确认的两处"报告本身会说错话"**:
+    1. **L50 在同一份报告里有两种显示**:General Statistics 是整数(8 / 11),QUAST 模块是 `0.0 K`。原因是 MultiQC 对"计数类"列做了千位缩放(8 → 0.008 K → 显示 0.0);`table_columns_placement` 只能排序,改不了模块的 `suffix`/`modify`,所以**只能靠文档指明"信 General Statistics 那一列"**。
+    2. **软件版本表声称 `Snakemake 9.25.2`**,而这是 Nextflow 管线。该行来自**复用的 Snakemake 时代 `multiqc_config.yaml`(D4 字节一致)**,是遗留项;修它必须动这份复用资产(破坏字节一致、需更新 `docs/asset-sources.md` 的 sha256),因此列为**待用户决定**、未擅自修改。
+  - 其余问答覆盖:QUAST `-r` 为何不可用、genome fraction 与 dnadiff 的可比性、一个样本为何在总表里出现 5 行、两个 GC 列各是什么、MEMOTE 68.1 % 不是"正确率"、表里 2486 vs 内嵌 MEMOTE 2496(cobra 读入补 10 个 exchange)、BUSCO 100 % 与 genome fraction 97.4 % 为何不矛盾、aligned contigs 30.5 % 为何不代表装配差、%Dups / %Failed 的正确读法、运行时表为何没有 5b 与生长检查、千分位空格等。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
