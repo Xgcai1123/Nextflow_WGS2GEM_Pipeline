@@ -15,7 +15,7 @@ Reference points throughout are this project's two validation isolates:
 
 ## 1. A successful run, at a glance
 
-Exit code 0, `reports/multiqc/multiqc_report.html` written, and per sample roughly:
+Exit code 0, `results/report/multiqc_report.html` written, and per sample roughly:
 
 | signal | healthy | this project |
 |---|---|---|

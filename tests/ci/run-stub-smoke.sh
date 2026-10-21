@@ -69,48 +69,48 @@ echo "== published artifact tree =="
 
 for s in CI_A CI_B; do
     for r in 1 2; do
-        expect_file "raw fastqc zip ${s}_${r}"  "${CI_OUT}/data/qc/raw/${s}_${r}_fastqc.zip"
-        expect_file "raw fastqc html ${s}_${r}" "${CI_OUT}/data/qc/raw/${s}_${r}_fastqc.html"
-        expect_file "trimmed fastqc zip ${s}_${r}"  "${CI_OUT}/data/qc/trimmed/${s}_R${r}_paired_fastqc.zip"
-        expect_file "trimmed fastqc html ${s}_${r}" "${CI_OUT}/data/qc/trimmed/${s}_R${r}_paired_fastqc.html"
+        expect_file "raw fastqc zip ${s}_${r}"  "${CI_OUT}/results/qc/fastqc_raw/${s}_${r}_fastqc.zip"
+        expect_file "raw fastqc html ${s}_${r}" "${CI_OUT}/results/qc/fastqc_raw/${s}_${r}_fastqc.html"
+        expect_file "trimmed fastqc zip ${s}_${r}"  "${CI_OUT}/results/qc/fastqc_trimmed/${s}_R${r}_paired_fastqc.zip"
+        expect_file "trimmed fastqc html ${s}_${r}" "${CI_OUT}/results/qc/fastqc_trimmed/${s}_R${r}_paired_fastqc.html"
     done
     for kind in R1_paired R1_unpaired R2_paired R2_unpaired; do
-        expect_file "trimmed reads ${s}_${kind}" "${CI_OUT}/data/clean_trimmomatic/${s}_${kind}.fastq.gz"
+        expect_file "trimmed reads ${s}_${kind}" "${CI_OUT}/results/reads/${s}_${kind}.fastq.gz"
     done
-    expect_file "assembly ${s}"       "${CI_OUT}/assembly/spades/${s}/contigs.fasta"
+    expect_file "assembly ${s}"       "${CI_OUT}/results/assembly/${s}/contigs.fasta"
     for f in report.html report.txt report.tsv; do
-        expect_file "quast ${f} ${s}"  "${CI_OUT}/data/qc/quast/${s}/${f}"
+        expect_file "quast ${f} ${s}"  "${CI_OUT}/results/qc/quast/${s}/${f}"
     done
     for ext in json txt; do
-        expect_file "busco ${ext} ${s}" "${CI_OUT}/data/qc/busco/${s}/short_summary.specific.enterobacterales_odb10.${s}.${ext}"
+        expect_file "busco ${ext} ${s}" "${CI_OUT}/results/qc/busco/${s}/short_summary.specific.enterobacterales_odb10.${s}.${ext}"
     done
     for ext in gff3 faa tsv ffn gbff txt; do
-        expect_file "bakta ${ext} ${s}" "${CI_OUT}/annotation/bakta/${s}/${s}.${ext}"
+        expect_file "bakta ${ext} ${s}" "${CI_OUT}/results/annotation/${s}/${s}.${ext}"
     done
     for f in "${s}.xml" "${s}.faa" "${s}.tsv"; do
-        expect_file "carveme ${f}"     "${CI_OUT}/models/carveme/${s}/${f}"
+        expect_file "carveme ${f}"     "${CI_OUT}/results/models/carveme/${s}/${f}"
     done
     for f in index.html memote_result.json memote_summary.tsv; do
-        expect_file "memote ${f} ${s}" "${CI_OUT}/models/memote/${s}/${f}"
+        expect_file "memote ${f} ${s}" "${CI_OUT}/results/models/memote/${s}/${f}"
     done
 done
 # F26: the growth check is ONE aggregate task (one section, a row per sample),
 # so its published artefacts are cohort-level, not per sample.
 for f in growth_mqc.tsv growth.tsv; do
-    expect_file "growth ${f}" "${CI_OUT}/models/growth/${f}"
+    expect_file "growth ${f}" "${CI_OUT}/results/models/growth/${f}"
 done
 # F30: only CI_A names a reference, so only CI_A publishes a comparison. The
 # absence for CI_B is an assertion too -- a cohort without references must not
 # grow an empty section or a task of zeros.
 for f in CI_A_refcomp.tsv CI_A_assembly_ref_mqc.tsv; do
-    expect_file "refcompare ${f}" "${CI_OUT}/data/qc/refcompare/CI_A/${f}"
+    expect_file "refcompare ${f}" "${CI_OUT}/results/qc/refcompare/CI_A/${f}"
 done
-if [ -e "${CI_OUT}/data/qc/refcompare/CI_B" ]; then
+if [ -e "${CI_OUT}/results/qc/refcompare/CI_B" ]; then
     fail "CI_B has no reference in the fixture but a refcompare directory was published"
 else
     pass "refcompare: no task and no directory for the sample without a reference"
 fi
-expect_file "aggregate report" "${CI_OUT}/reports/multiqc/multiqc_report.html"
+expect_file "aggregate report" "${CI_OUT}/results/report/multiqc_report.html"
 
 echo "== validated output tree untouched (F18 guard) =="
 

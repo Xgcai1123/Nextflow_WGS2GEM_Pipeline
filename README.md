@@ -111,10 +111,10 @@ The most relevant ones:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `raw_dir` | `../WGSpipeline/raw` | base directory for the `fq1`/`fq2` paths |
-| `bakta_db` | `../WGSpipeline/db/bakta/db-light` | Bakta database (`version.json` acts as an upgrade sentinel) |
-| `busco_db` | `../WGSpipeline/db/busco` | BUSCO lineage download/cache directory |
-| `ref_dir` | `db/reference` | base directory for the optional `reference` column (F30) |
+| `raw_dir` | `data/raw` | base directory for the `fq1`/`fq2` paths |
+| `bakta_db` | `data/db/bakta/db-light` | Bakta database (`version.json` acts as an upgrade sentinel) |
+| `busco_db` | `data/db/busco` | BUSCO lineage download/cache directory |
+| `ref_dir` | `data/reference` | base directory for the optional `reference` column (F30) |
 | `threads_default` | `8` | threads for Trimmomatic / SPAdes |
 | `busco_lineage` | `enterobacterales_odb10` | changes the BUSCO output filenames |
 | `carveme_solver` | `scip` | `cplex`/`gurobi` need a licence |
@@ -125,28 +125,47 @@ The most relevant ones:
 
 ## Outputs
 
-The output directory tree intentionally mirrors the original Snakemake layout:
+Everything a run produces lands under one root. The layout groups by what a reader
+is looking for, not by which tool produced it:
 
 ```
-data/qc/raw/                 FastQC on raw reads
-data/clean_trimmomatic/      trimmed reads (paired + unpaired)
-data/qc/trimmed/             FastQC on trimmed reads
-assembly/spades/<sample>/    SPAdes assembly (contigs.fasta + side products)
-data/qc/quast/<sample>/      QUAST report.html/.txt/.tsv
-data/qc/refcompare/<sample>/ assembly vs reference: <sample>_refcomp.tsv + *_mqc.tsv (F30)
-data/qc/busco/<sample>/      BUSCO short summaries
-annotation/bakta/<sample>/   Bakta .gff3/.faa/.tsv/.ffn/.gbff/.txt
-models/carveme/<sample>/     CarveMe draft model (.xml + diamond .tsv)
-models/memote/<sample>/      MEMOTE index.html + result JSON + score TSV
-models/growth/               defined-medium growth check (growth_mqc.tsv + growth.tsv)
-reports/multiqc/             aggregate report (+ custom_content/, multiqc_report_data/)
+data/                        INPUTS (git-ignored, fetched or supplied)
+  raw/                       raw paired-end FASTQ
+  db/                        Bakta database, BUSCO lineage cache
+  reference/                 NCBI reference genomes (optional, step 5b)
+  cache/                     persistent caches (AMR guard's known-bad sequences)
+
+results/                     OUTPUTS (git-ignored, recreated by a run)
+  qc/                        every quality report in one place
+    fastqc_raw/              FastQC on raw reads
+    fastqc_trimmed/          FastQC on trimmed reads
+    quast/<sample>/          QUAST report.html/.txt/.tsv
+    busco/<sample>/          BUSCO short summaries
+    refcompare/<sample>/     assembly vs reference (F30)
+  reads/                     trimmed reads (paired + unpaired)
+  assembly/<sample>/         SPAdes assembly (contigs.fasta + side products)
+  annotation/<sample>/       Bakta .gff3/.faa/.tsv/.ffn/.gbff/.txt
+  models/
+    carveme/<sample>/        draft model (.xml) + diamond table
+    memote/<sample>/         MEMOTE index.html + result JSON + score TSV
+    growth/                  defined-medium growth check (growth_mqc.tsv + growth.tsv)
+  report/                    the reports you show to somebody
+    multiqc_report.html      the single aggregate deliverable
+    multiqc_data/            MultiQC's parsed data (machine-readable)
+    nextflow/                Nextflow's execution report + trace
+
 logs/                        per-step logs
 benchmarks/                  per-step wall times (MultiQC "step runtimes" table)
 ```
 
+Two roots and nothing else: **`data/` is what goes in, `results/` is what comes out.**
+A run creates no files anywhere else (`logs/`, `benchmarks/`, `work/` and `.nextflow/`
+are run bookkeeping, not results). This deliberately does **not** mirror the original
+Snakemake tree — content is still byte-comparable, only the paths moved (F33/D23).
+
 ## Report
 
-`reports/multiqc/multiqc_report.html` is a single self-contained page that:
+`results/report/multiqc_report.html` is a single self-contained page that:
 
 > New to the output? **[docs/interpretation.md](docs/interpretation.md)** explains every
 > number in it: what it means, when it indicates a problem, and what it does not prove.
@@ -201,7 +220,7 @@ result.
 Fetching the two references used in this project's validation (~1.4 MB and ~1.7 MB):
 
 ```bash
-mkdir -p db/reference && cd db/reference
+mkdir -p data/reference && cd data/reference
 for acc in GCA_000005845.2 GCA_000008865.2; do
   curl -sSL "https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/$acc/download?include_annotation_type=GENOME_FASTA" -o "$acc.zip"
   unzip -o -q "$acc.zip" -d "$acc.d"
@@ -211,7 +230,7 @@ done
 
 Both are complete genomes from RefSeq/GenBank: *E. coli* K-12 substr. MG1655 (4,641,652 bp,
 `U00096.3`) and *E. coli* O157:H7 str. Sakai (5,594,605 bp: chromosome + pOSAK1 + pO157).
-`db/` is git-ignored, so they are fetched, never committed.
+`data/` is git-ignored, so they are fetched, never committed.
 
 Measured on this project's two isolates:
 
@@ -333,21 +352,33 @@ biomass/growth tests that carry zero weight.
 ## Repository layout
 
 ```
-main.nf                     DSL2 workflow: validation + 10 processes
-nextflow.config             parameters, process settings, conda, profiles
+main.nf                     DSL2 workflow: validation + 12 processes
+nextflow.config             parameters, process settings, conda, profiles,
+                            Nextflow's own report/trace location
+samples.tsv                 the cohort (no reference genomes)
+samples.with_reference.tsv  the same cohort with the optional `reference` column
 multiqc_config.yaml         MultiQC config (byte-identical reused asset)
 multiqc_nextflow.yaml       MultiQC presentation overlay (step order, MEMOTE + QUAST embedding)
 envs/                       conda environment definitions (8, byte-identical)
 media/                      versioned growth-medium definition (M9, aerobic, glucose)
 scripts/                    helper scripts (byte-identical) + memote_html_section.py,
-                            quast_html_section.py, check_growth.py
+                            quast_html_section.py, check_growth.py, compare_assembly_ref.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
-docs/                       design document, asset provenance, audit notes
+docs/                       design document (F/D records), interpretation guide,
+                            asset provenance, generated project tree
 tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard,
                             failure isolation, report-embedding scripts, growth check)
 .github/workflows/ci.yml    runs tests/ci/ on every push and pull request
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
+                            (not part of the workflow, not run by CI)
+data/                       inputs: raw reads, databases, references, caches  (ignored)
+results/                    outputs: qc, reads, assembly, annotation, models, report (ignored)
+logs/ benchmarks/           per-run bookkeeping                                  (ignored)
+work/ .nextflow/            engine cache, environments, run history             (ignored)
 ```
+
+Generated artefacts are never committed; `docs/project-structure.md` is the same tree
+with annotations, produced from `git ls-files` so it cannot drift.
 
 ## Versioning
 

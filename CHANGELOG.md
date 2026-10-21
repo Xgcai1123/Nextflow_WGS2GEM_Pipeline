@@ -179,6 +179,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The project is now self-contained: `data/` in, `results/` out, nothing else.** This project
+  claimed to be standalone while its raw reads, Bakta database and BUSCO lineage still lived in the
+  sibling Snakemake checkout — a structural mistake. They moved into `data/` (raw reads, `db/`,
+  `reference/`, `cache/`), and every output moved under a single `results/` root (`qc/`, `reads/`,
+  `assembly/`, `annotation/`, `models/`, `report/`). The old checkout keeps symlinks to the new
+  locations, so it still runs without a second 4.4 GB copy. The output tree no longer mirrors the
+  original Snakemake tree: content is still byte-comparable, only the paths moved (F33/D23).
+
+  The clutter that motivated this is gone with it: `results/report/` now holds only the report, its
+  parsed data and a `nextflow/` subdirectory — not the staging directories and custom-content TSVs
+  that `publishDir` used to spray there. Nextflow's own `report-<ts>.html` / `trace-<ts>.txt` (ten
+  of which had accumulated in the project root) are pinned to `results/report/nextflow/` and
+  disabled in CI, because those directives are evaluated at config-parse time and a `-c` overlay
+  cannot redirect them — CI had already written a 1.6 MB report into the real tree before this was
+  caught. The AMR guard's cache, which defaulted to a stray `db/` at the project root, is now
+  `data/cache/amr_guard/` via the script's own `WGS_AMR_GUARD_CACHE` override (the script is a
+  byte-identical reused asset and was not edited). `.DS_Store`, ten rotated engine logs, `.nxhome/`,
+  `.pytest_cache/`, a 942 MB `m0probe/conda-cache/` and every empty directory were deleted.
 - **The growth check also asserts the biomass yield, not just the growth rate.** The rate moves
   with the medium's uptake bounds — measured: 0.476 / 0.953 / 1.283 / 28.772 h⁻¹ for a glucose
   bound of 5 / 10 / 20 / unlimited — so a rate alone cannot support a claim about the model. The

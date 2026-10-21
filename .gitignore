@@ -6,14 +6,11 @@
 /.nf-nextflow/
 
 # ---- Generated pipeline outputs (recreated by every run) --------------------
-# Anchored to the repository root so that nested paths such as m0probe/data/
-# are NOT ignored.
-/db/
+# Two roots, anchored so nested paths such as m0probe/data/ are NOT ignored:
+#   data/     inputs   -- raw reads, reference databases, caches
+#   results/  outputs  -- QC, derived data, models, reports
 /data/
-/assembly/
-/annotation/
-/models/
-/reports/
+/results/
 /logs/
 /benchmarks/
 

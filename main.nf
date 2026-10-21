@@ -283,6 +283,10 @@ process BAKTA {
     mkdir -p ${params.logs_dir}/bakta
     mkdir -p out
 
+    # F33: the AMR-guard cache defaults to `<repo>/db/amr_guard/`, which put a
+    # stray db/ at the project root. The script reads WGS_AMR_GUARD_CACHE (env), so the
+    # cache moves under data/cache/ without touching the (byte-identical) asset.
+    export \$WGS_AMR_GUARD_CACHE=${params.amr_cache}
     # Prepend the AMR-guard wrapper dir so it shadows the conda bakta entry
     # point (upstream ncbi/amr#191: one protein with overlapping NCBIFAM hits
     # kills the whole run).
@@ -444,7 +448,12 @@ process MULTIQC {
     tag "${report_name}"
     conda "${params.envs_dir}/fastqc.yaml"
     cpus 1
-    publishDir "${params.multiqc_dir}", mode: 'copy', overwrite: true
+    // Publish only what a reader came for. Everything else this task builds --
+    // staged BUSCO summaries, the MEMOTE/QUAST iframe fragments, the custom-content
+    // TSVs, the intermediate staging dirs -- is a build intermediate; publishing
+    // them is what made the old reports/multiqc/ look like a build directory.
+    publishDir(path: { params.multiqc_dir }, pattern: 'multiqc_report*.html', mode: 'copy', overwrite: true)
+    publishDir(path: { params.multiqc_dir }, pattern: 'multiqc_data/**', mode: 'copy', overwrite: true)
 
     input:
     val  report_name             // "multiqc_report" + optional tag (F19: computed in
@@ -470,14 +479,14 @@ process MULTIQC {
 
     # ---- 1. custom content（先清空再生成：数据源缺失时脚本会跳过写文件，
     #          残留 TSV 会把上一个更大队列的样本"泄漏"进本次报告）----
-    rm -rf ${params.cc_dir}
+    rm -rf custom_content
     "\${CONDA_PREFIX}/bin/python3" ${params.scripts_dir}/multiqc_extras.py \\
         --samples-tsv ${params.samples_tsv} \\
         --quast-dir ${params.quast_dir} \\
         --carveme-dir ${params.carveme_dir} \\
         --memote-dir ${params.memote_dir} \\
         --bench-dir ${params.bench_dir} \\
-        --outdir ${params.cc_dir} \\
+        --outdir custom_content \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
     # ---- 2. BUSCO 摘要暂存（按样本表软链，不 glob 整个 busco 目录）----
@@ -534,10 +543,11 @@ process MULTIQC {
     # -c twice: the reused config first, the presentation overlay second.
     # ref_section may be empty (no references in this cohort) -- MultiQC accepts a
     # directory with no *_mqc.* files, so the section simply does not appear.
-    multiqc \$qc_files busco_stage ${params.cc_dir} memote_html quast_html ref_section ${growth_section} \\
+    multiqc \$qc_files busco_stage custom_content memote_html quast_html ref_section ${growth_section} \\
         -c ${multiqc_config} \\
         -c ${multiqc_config_extra} \\
-        -o . -f -n ${report_name} \\
+        -o . -f -n ${report_name} \
+        --data-dir multiqc_data \\
         >> ${params.logs_dir}/multiqc.log 2>&1
 
     bench_finish multiqc ""

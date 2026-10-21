@@ -40,7 +40,7 @@ NF_CONFIGS="${INJECT_CONFIG} ${CI_DIR}/ignore-strategy.config" \
 status_ignore=$?
 expect_eq "ignore exits 0 despite the dead task" "0" "${status_ignore}"
 expect_grep "the dead task is only a NOTE" "Error is ignored" "${log_ignore}"
-expect_absent "and the hole stays in the outputs" "${CI_OUT}/data/qc/raw/${FAIL_SAMPLE}_1_fastqc.zip"
+expect_absent "and the hole stays in the outputs" "${CI_OUT}/results/qc/fastqc_raw/${FAIL_SAMPLE}_1_fastqc.zip"
 
 echo "== run 1: inject a task failure for ${FAIL_SAMPLE} (finish) =="
 
@@ -55,18 +55,18 @@ expect_grep "the failed task is named" "FASTQC_RAW (${FAIL_SAMPLE}" "${log1}"
 expect_grep "engine reports the task error" "terminated with an error exit status" "${log1}"
 
 echo "  -- no deliverables for the failed sample (no partial results) --"
-for d in "assembly/spades/${FAIL_SAMPLE}" \
-         "data/qc/quast/${FAIL_SAMPLE}" \
-         "data/qc/busco/${FAIL_SAMPLE}" \
-         "annotation/bakta/${FAIL_SAMPLE}" \
-         "models/carveme/${FAIL_SAMPLE}" \
-         "models/memote/${FAIL_SAMPLE}"; do
+for d in "results/assembly/${FAIL_SAMPLE}" \
+         "results/qc/quast/${FAIL_SAMPLE}" \
+         "results/qc/busco/${FAIL_SAMPLE}" \
+         "results/annotation/${FAIL_SAMPLE}" \
+         "results/models/carveme/${FAIL_SAMPLE}" \
+         "results/models/memote/${FAIL_SAMPLE}"; do
     expect_absent "absent: ${d}" "${CI_OUT}/${d}"
 done
-expect_absent "no aggregate report claiming success" "${CI_OUT}/reports/multiqc/multiqc_report.html"
+expect_absent "no aggregate report claiming success" "${CI_OUT}/results/report/multiqc_report.html"
 
 echo "  -- work already finished for the healthy sample survives --"
-expect_file "preserved: ${OK_SAMPLE} raw QC" "${CI_OUT}/data/qc/raw/${OK_SAMPLE}_1_fastqc.zip"
+expect_file "preserved: ${OK_SAMPLE} raw QC" "${CI_OUT}/results/qc/fastqc_raw/${OK_SAMPLE}_1_fastqc.zip"
 
 if [ "${status1}" -ne 0 ] && [ "${status1}" -ne 1 ]; then
     echo "  ---- nextflow output ----"
@@ -84,11 +84,11 @@ expect_grep "-resume reuses ${OK_SAMPLE} work instead of recomputing it" \
     "Cached process > FASTQC_RAW (${OK_SAMPLE}_1)" "${log2}"
 expect_nogrep "-resume does not resubmit that task" "Submitted process > FASTQC_RAW (${OK_SAMPLE}_1)" "${log2}"
 for s in "${OK_SAMPLE}" "${FAIL_SAMPLE}"; do
-    expect_file "recovered: ${s} assembly"       "${CI_OUT}/assembly/spades/${s}/contigs.fasta"
-    expect_file "recovered: ${s} model"          "${CI_OUT}/models/carveme/${s}/${s}.xml"
-    expect_file "recovered: ${s} MEMOTE report"  "${CI_OUT}/models/memote/${s}/index.html"
+    expect_file "recovered: ${s} assembly"       "${CI_OUT}/results/assembly/${s}/contigs.fasta"
+    expect_file "recovered: ${s} model"          "${CI_OUT}/results/models/carveme/${s}/${s}.xml"
+    expect_file "recovered: ${s} MEMOTE report"  "${CI_OUT}/results/models/memote/${s}/index.html"
 done
-expect_file "recovered: aggregate report" "${CI_OUT}/reports/multiqc/multiqc_report.html"
+expect_file "recovered: aggregate report" "${CI_OUT}/results/report/multiqc_report.html"
 
 if [ "${status2}" -ne 0 ]; then
     echo "  ---- nextflow output ----"

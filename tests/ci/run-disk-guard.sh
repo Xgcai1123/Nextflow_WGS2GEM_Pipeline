@@ -40,7 +40,7 @@ expect_grep   "names the work cache"        "Nextflow task cache" "${log2}"
 expect_grep   "names the conda cache"       "conda environments" "${log2}"
 expect_grep   "documents the override"      "--min_free_disk_gb" "${log2}"
 expect_nogrep "no task was submitted"       "Submitted process" "${log2}"
-expect_absent "no report was written"       "${CI_OUT}/reports/multiqc/multiqc_report.html"
+expect_absent "no report was written"       "${CI_OUT}/results/report/multiqc_report.html"
 
 echo "== disk guard: disabled =="
 log3="$(mktemp)"

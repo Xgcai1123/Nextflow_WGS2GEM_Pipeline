@@ -43,6 +43,6 @@
 | `GCA_000005845.2` | 参照 1：*E. coli* K-12 substr. **MG1655**，complete genome | 4,641,652 bp，1 条（`U00096.3`）<br>md5 `b62abb256585725bb26065df188f355b` | NCBI Datasets：`/genome/accession/GCA_000005845.2/download?include_annotation_type=GENOME_FASTA` |
 | `GCA_000008865.2` | 参照 2：*E. coli* **O157:H7 str. Sakai**，complete genome | 5,594,605 bp，3 条（染色体 `BA000007.3` + pOSAK1 + pO157）<br>md5 `1fd428ef2643c351c25ade264d5531ec` | 同上，换登录号 |
 
-参照基因组落在 `db/reference/`（`/db/` 已在 `.gitignore` 中），下载命令见 README 的 *Assembly validation* 一节。
+参照基因组落在 `data/reference/`（`/data/` 已在 `.gitignore` 中），下载命令见 README 的 *Assembly validation* 一节。
 
 **已知的未知**：CarveMe 包里**没有**关于 `media_db.tsv` 出处（它是从哪些文献/模型收集来的）的任何说明或引用。因此"CarveMe 的 M9 行本身从哪来"这一层未被本项目核实；本项目能追溯的是"这 20 个化合物确实来自 carveme 1.6.6 的该文件，且其 sha256 如上"。若要对外声明更上游的可引用性，需要另行查证上游源码仓库。

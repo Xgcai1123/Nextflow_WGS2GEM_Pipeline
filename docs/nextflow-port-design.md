@@ -1084,6 +1084,18 @@ profiles {
   - **验证**:本地连跑 3 次全绿;25 条断言(含 `absent: assembly/spades/CI_B`)全部通过。
   - **教训**:这次是 CI 替本地抓到了问题,而不是反过来——说明"本地绿"确实不等于"CI 绿"(F28),也说明**注入式测试的注入点必须落在"能截断该样本全部下游"的位置**,否则断言的通路其实是空的。
 
+- **F33 目录结构整改:项目必须自立,产物必须归一处（用户反馈，2026-10-21）**：用户指出"这是独立项目,raw data 却在兄弟仓库"是**结构性失误**,并要求整治"QC/报告东一个西一个、让人困惑的空目录、`make_ppt.py` 这类中间产物"。整改如下。
+  - **输入搬进项目**(不再依赖 `../WGSpipeline`):`../WGSpipeline/raw` → `data/raw`(424 MB)、`../WGSpipeline/db/{bakta,busco}` → `data/db/`(4.0 G + 62 M)、`db/reference` → `data/reference`(9.9 M)。老仓库原地留**符号链接**(`raw`/`db` 指向新位置),所以它仍可运行,而磁盘上没有第二份 4.4 G。
+  - **单一产物根 `results/`**:原来的 `data/qc/*`、`data/clean_trimmomatic`、`assembly/spades`、`annotation/bakta`、`models/*`、`reports/multiqc` 六处并列,现在收成
+    `results/qc/{fastqc_raw,fastqc_trimmed,quast,busco,refcompare}/`、`results/reads/`、`results/assembly/`、`results/annotation/`、`results/models/{carveme,memote,growth}/`、`results/report/`。
+  - **报告目录只放报告**:MULTIQC 原来 `publishDir` 整个任务目录,于是 `custom_content/`、`busco_stage/`、`memote_html/`、`quast_html/`、`ref_section/`、`multiqc_report_data/` 全都出现在报告旁边——这正是"像个构建目录"的来源。现在只发布 `multiqc_report*.html` 与 `multiqc_data/**`;custom content 改为任务内目录(`--outdir custom_content`),不再发布。
+  - **Nextflow 自己的 report/trace 归位**:Nextflow 默认把 `report-<ts>.html`、`trace-<ts>.txt`、timeline、dag 写到**启动目录**,这就是项目根上那 10 个散文件的来源。现固定到 `results/report/nextflow/{report.html,trace.tsv}`,并关掉 timeline/dag。
+    **踩到的坑**:这两个块在**配置解析期**求值,看不到 `-c` 覆盖(与 F19 同类)。实测:改完路径后跑 CI,报告仍写进了**真实的** `results/report/nextflow/`(1.6 MB)。修法是在 `tests/ci/ci.config` 里直接 `report { enabled = false }` / `trace { enabled = false }`,而不是"重定向"——CI 不该产生执行报告。
+  - **AMR 缓存不再长在根上**:`scripts/amr_guard/amr_chunk_guard.py` 的缓存默认是 `<repo>/db/amr_guard/known_bad_sequences.tsv`(脚本用 `Path(__file__).parents[2]` 定位),所以根目录会冒出一个 `db/`。该脚本是 D4 字节一致资产**不能改**,于是用脚本自己支持的 `WGS_AMR_GUARD_CACHE` 环境变量把缓存指到 `data/cache/amr_guard/`,并在 `BAKTA` 里 export。缓存是持久收益:它按 sha256 记住会让 AMRFinderPlus 崩溃的序列,省掉每样本约 5.5 分钟的重试。
+  - **清掉可重建垃圾**:`.DS_Store`、10 个 `.nextflow.log.*`、根目录 `report-*.html`×2 与 `trace-*.txt`×2、`.nxhome/`、`.pytest_cache/`、`m0probe/conda-cache/`(942 MB)、`tests/ci/out/`,以及全部空目录。`m0probe/` 的**源码**保留(它是文档化的引擎探针)。
+  - **取舍(显式)**:不再镜像 Snakemake 的输出树。内容仍逐字节可比,**只有路径变了**;README 里"intentionally mirrors the original Snakemake layout"这句话已改写。这是 D23。
+  - **验证**:7 个本地检查全绿;CI stub 25 任务;`tests/ci/out` 顶层只剩 `results/` 与 `work/`(此前是散的五类目录);CI 运行后真实 `results/` 与 `data/` **未被触碰**。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1190,6 +1202,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D19 | 生长检查排在 MEMOTE **之前**,且用**数据流边强制**(MEMOTE 消费由 GROWTH_CHECK 广播出的 trigger,`combine` 到每样本),不靠声明顺序;报告章节顺序同步为 growth(650) > memote(600)。理由:6 s vs 250 s/样本,生长是更根本的可存活性问题;MEMOTE 的生长测试权重为 0 且极性反了(F25) | 已定(2026-10-15,用户与导师反馈,F29) |
 | D20 | 参照比对**独立成步**(`ASSEMBLY_REF`,BLASTN,Bakta 环境),**不用** QUAST 的 `-r`:后者在 arm64 macOS 上自带 minimap2 编译失败并**静默降级**成无参照统计(且无外部比对器入口)。阈值取 QUAST 默认(≥95 % identity、≥65 bp)以便与标准 dnadiff 可比;参照不匹配时 **exit 2**;QUAST 输出保持逐字节一致 | 已定(2026-10-15,用户与导师反馈 #2,F30) |
 | D21 | 生长检查**同时断言得率**(gDW/g,窗口 0.30–0.70),不只断言 μ：μ 强依赖介质的吸收上限这一约定,得率不依赖(它是生物质化学计量);摩尔质量由介质文件声明(`carbon_source_mw`)而非代码硬编码。敏感度表写入介质文件与 `docs/interpretation.md` | 已定(2026-10-15,用户与导师反馈 #3,F31) |
+| D23 | 目录结构:**`data/` = 输入**(raw/db/reference/cache)、**`results/` = 产物**(qc/reads/assembly/annotation/models/report)、`logs/`+`benchmarks/` = 运行账本、`work/`+`.nextflow/` = 引擎;**不再镜像 Snakemake 输出树**(内容仍逐字节可比,只换路径)。MULTIQC 只发布报告本体与其数据目录;Nextflow 自身 report/trace 固定 `results/report/nextflow/` 且在 CI 关闭;AMR 缓存经 `WGS_AMR_GUARD_CACHE` 落在 `data/cache/` | 已定(2026-10-21,用户反馈,F33) |
 
 ## 17. 里程碑与后续开放问题
 
