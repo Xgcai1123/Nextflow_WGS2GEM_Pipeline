@@ -44,4 +44,20 @@ else
 fi
 
 rm -f "${log}"
+
+# --- the pipeline figure is code, so it is checked like code ------------------
+# docs/make_pipeline_diagram.py generates the flow chart in
+# docs/pipeline-summary.html. It refuses to emit a figure whose edge leaves a box
+# on the wrong side, runs through another box, or whose label is wider than the
+# box that holds it -- the class of error a hand-drawn diagram cannot catch.
+if command -v python3 >/dev/null 2>&1; then
+    if out="$(cd "${PROJECT_DIR}" && python3 docs/make_pipeline_diagram.py --check 2>&1)"; then
+        pass "pipeline diagram: ${out#OK diagram: }"
+    else
+        fail "pipeline diagram geometry: ${out}"
+    fi
+else
+    fail "python3 not found -- cannot validate docs/make_pipeline_diagram.py"
+fi
+
 summary "run-lint"

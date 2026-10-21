@@ -141,6 +141,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The pipeline figure is generated and machine-checked instead of hand-drawn.** Section 3 of
+  `docs/pipeline-summary.html` is now an inline SVG produced by `docs/make_pipeline_diagram.py`,
+  whose edge list is transcribed from `workflow { main: … }` and whose geometry is computed —
+  no coordinates are typed by hand. The script refuses to write anything when an edge leaves a
+  node on the wrong side, when any sampled point of an edge falls inside *another* node's box,
+  when two boxes overlap, or when a label is wider than the box holding it; the geometry check is
+  part of `tests/ci/run-lint.sh`, so CI keeps guarding it. Three line styles carry the semantics —
+  solid: a file is handed on; dotted: ordering only (step 9 before step 10, no file passes);
+  dashed: read into the report by MULTIQC. The layout is a pipeline, not a tree: the data path
+  (raw → Trimmomatic → SPAdes → Bakta → CarveMe) runs across the top, every step whose output the
+  report reads sits below it on a dashed collection bus that feeds the MULTIQC bar, and CarveMe's
+  model statistics join the same bus through a right-hand channel. Each box shows its step number,
+  the tool and version that runs, and the artifact it publishes. The old nested-list figure and the
+  `.dag` CSS that styled it are gone (design doc F39).
+- **MULTIQC did not wait for the reference-comparison step.** The `up_ok` trigger mixed FastQC
+  (both passes), QUAST, BUSCO, CarveMe and MEMOTE, but not `ASSEMBLY_REF` — while MULTIQC copies
+  that section out of `refcomp_dir` by path with `if [ -f … ]`. A cohort with references could
+  therefore lose the section silently if 5b were still running when the report was assembled: no
+  error, no warning, a report that looks complete. It never triggered on the two-sample run
+  (BLASTN finishes far earlier than MEMOTE) but it is a race, not a guarantee, and it contradicts
+  the step's own comment. Fixed by mixing `ASSEMBLY_REF.out` into `up_ok`; an empty channel is a
+  no-op, so cohorts without references are unaffected. Task count and published artifacts are
+  unchanged; MULTIQC's task hash changes, so the next `-resume` rebuilds the report once
+  (design doc F40).
+
 - **Corrected the pipeline diagram and audited the summary page against source.** The diagram drew
   an edge from the raw FASTQ straight to SPAdes; `main.nf` wires
   `SPADES(TRIMMOMATIC.out.map { … })` and the process declares `path(r1_paired), path(r2_paired)`,

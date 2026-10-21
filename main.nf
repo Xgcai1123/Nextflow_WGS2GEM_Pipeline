@@ -778,6 +778,12 @@ workflow {
         .mix(FASTQC_RAW.out.map    { n, r, z, h -> z })
         .mix(FASTQC_TRIMMED.out.map{ n, r, z, h -> z })
         .mix(QUAST.out.map         { n, html, txt, tsv -> tsv })
+        // F40: 5b was missing here. Its table is copied out of refcompare_dir by
+        // path inside MULTIQC, so without this edge the report could be assembled
+        // while ASSEMBLY_REF was still running and the section would vanish
+        // silently (the copy loop is `if [ -f ]`). Empty when no row names a
+        // reference; mixing an empty channel is a no-op.
+        .mix(ASSEMBLY_REF.out.map  { _n, _tsv, mqc -> mqc })
         .mix(BUSCO.out.map         { n, j, t -> t })
         .mix(CARVEME.out.map       { n, xml, faa, tsv -> xml })
         .mix(MEMOTE.out.map        { n, html, json, tsv -> tsv })

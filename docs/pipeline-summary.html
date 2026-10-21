@@ -59,14 +59,14 @@
            color:var(--grey); font-size:12.5px; }
   @media print { body { background:#fff; } nav { display:none; } pre { background:#f4f6f8; color:#111; } }
 
-  /* --- tree / DAG (pure CSS, no absolute positioning) --- */
-  .tree, .dag { list-style:none; margin:10px 0 6px; padding-left:0; font-size:13.5px; }
-  .tree ul, .dag ul { list-style:none; margin:0; padding-left:26px; position:relative; }
-  .tree ul::before, .dag ul::before {
+  /* --- project tree (pure CSS, no absolute positioning) --- */
+  .tree { list-style:none; margin:10px 0 6px; padding-left:0; font-size:13.5px; }
+  .tree ul { list-style:none; margin:0; padding-left:26px; position:relative; }
+  .tree ul::before {
     content:""; position:absolute; left:10px; top:0; bottom:14px; border-left:1px solid var(--line);
   }
-  .tree li, .dag li { position:relative; padding:3px 0 3px 16px; }
-  .tree ul > li::before, .dag ul > li::before {
+  .tree li { position:relative; padding:3px 0 3px 16px; }
+  .tree ul > li::before {
     content:""; position:absolute; left:-16px; top:15px; width:16px; border-top:1px solid var(--line);
   }
   .tree li .n { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; }
@@ -74,21 +74,22 @@
   .tree > li > .n { font-weight:600; color:var(--navy); }
   .tree li.dir > .n { font-weight:600; }
   .tree li.dir > .n::after { content:"/"; color:var(--teal); }
-  .dag li { display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; padding:4px 0 4px 16px; }
-  .dag .p { background:var(--navy); color:#fff; border-radius:6px; padding:3px 10px;
-            font-size:12.5px; font-weight:600; white-space:nowrap; }
-  .dag .p.opt { background:#5d6b7a; }
-  .dag .p .v { font-weight:400; color:#9fb6c9; margin-left:6px; }
-  .dag .o { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#33414f;
-            background:#eef2f6; border:1px solid var(--line); border-radius:5px; padding:2px 7px; }
-  .dag .o .u { color:var(--grey); }
-  .dag .in > .o { background:#fff; border-color:var(--teal); }
-  .dag .why { color:var(--grey); font-size:12px; font-style:italic; }
+  /* artifact chip: used by the collector box and the output list */
+  .o { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#33414f;
+       background:#eef2f6; border:1px solid var(--line); border-radius:5px; padding:2px 7px;
+       white-space:nowrap; }
   .collector { border:1px solid var(--line); border-radius:8px; background:#fff; padding:12px 16px; margin:16px 0; }
   .collector h4 { margin:0 0 8px; }
   .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--grey); margin:8px 0 0; }
   .legend span { display:inline-flex; align-items:center; gap:6px; }
   .swatch { width:14px; height:14px; border-radius:4px; display:inline-block; }
+  .legend i.rule { width:28px; height:0; border-top:2px solid var(--navy); display:inline-block; }
+  .legend i.rule.dotted { border-top-style:dotted; }
+  .legend i.rule.dashed { border-top-style:dashed; border-top-color:var(--teal); }
+  .figure { margin:16px 0 4px; background:#fff; border:1px solid var(--line);
+            border-radius:10px; padding:16px 14px 12px; }
+  .figure svg { width:100%; height:auto; display:block; }
+  figcaption { font-size:12.5px; color:var(--grey); margin-top:9px; max-width:1000px; }
 </style>
 </head>
 <body>
@@ -107,7 +108,7 @@
   <b>Contents</b><br>
   <a href="#what">1 What it does</a>
   <a href="#structure">2 Project structure</a>
-  <a href="#dag">3 The DAG</a>
+  <a href="#dag">3 The pipeline diagram</a>
   <a href="#steps">4 Step-by-step contract</a>
   <a href="#config">5 Configuration</a>
   <a href="#outputs">6 Outputs</a>
@@ -224,105 +225,96 @@ results/report/             multiqc_report.html, multiqc_report_data/, nextflow/
 <code>docs/project-structure.md</code> for the annotated version, which cannot drift because the
 generator refuses to run when a tracked file is unclassified.</p>
 
-<h2 id="dag">3 · The DAG</h2>
-<p>Read it top-down. Each line is <b>process → the artifact it produces</b>; indentation means
-"this artifact is what feeds the next block". Every artifact name is the real path pattern.</p>
+<h2 id="dag">3 · The DAG, as a pipeline</h2>
+<p>The top row is the data path: a sample's reads become contigs, the contigs become an
+annotation, the annotation becomes a model. The bottom row holds every step whose output
+the report reads; those hang off a dashed <b>report bus</b> that feeds <b>11 MULTIQC</b>.
+Each box carries the step number, the tool and version that runs, and — in the mono line —
+the artifact that step publishes. The full path patterns are in <a href="#steps">§4</a>,
+one per step, and in <a href="#outputs">§6</a>.</p>
 
-<ul class="dag">
-  <li class="in"><span class="o">data/raw/&lt;sample&gt;_{1,2}.fastq.gz</span>
-      <span class="why">the raw pair — read-only, never modified</span>
-    <ul>
-      <li><span class="p">1 FASTQC_RAW<span class="v">FastQC 0.12.1</span></span>
-          <span class="o">results/qc/fastqc_raw/&lt;s&gt;_{1,2}_fastqc.{html,zip}</span>
-          <span class="why">→ MultiQC (zips)</span></li>
-      <li><span class="p">2 TRIMMOMATIC<span class="v">Trimmomatic 0.39</span></span>
-          <span class="o">results/reads/&lt;s&gt;_R{1,2}_{paired,unpaired}.fastq.gz</span>
-          <span class="why">→ 3 and 4 (paired only)</span>
-        <ul>
-          <li><span class="p">3 FASTQC_TRIMMED<span class="v">FastQC 0.12.1</span></span>
-              <span class="o">results/qc/fastqc_trimmed/&lt;s&gt;_R{1,2}_paired_fastqc.{html,zip}</span>
-              <span class="why">→ MultiQC (zips)</span></li>
-          <li><span class="p">4 SPADES<span class="v">SPAdes 4.0.0 --careful</span></span>
-              <span class="o">results/assembly/&lt;s&gt;/contigs.fasta</span>
-              <span class="why">→ 5, 5b, 6, 7 (only contigs.fasta is published; Spades' side products stay in work/)</span>
-            <ul>
-              <li><span class="p">5 QUAST<span class="v">QUAST 5.2.0</span></span>
-                  <span class="o">results/qc/quast/&lt;s&gt;/report.{html,txt,tsv}</span>
-                  <span class="why">→ MultiQC: tsv as a table, html embedded</span></li>
-              <li><span class="p opt">5b ASSEMBLY_REF<span class="v">BLASTN 2.17.0 · optional</span></span>
-                  <span class="o">results/qc/refcompare/&lt;s&gt;/{&lt;s&gt;_refcomp.tsv, &lt;s&gt;_assembly_ref_mqc.tsv}</span>
-                  <span class="why">needs a reference genome per row → MultiQC</span></li>
-              <li><span class="p">6 BUSCO<span class="v">BUSCO 5.8.3</span></span>
-                  <span class="o">results/qc/busco/&lt;s&gt;/short_summary.specific.enterobacterales_odb10.&lt;s&gt;.{txt,json}</span>
-                  <span class="why">→ MultiQC</span></li>
-              <li><span class="p">7 BAKTA<span class="v">Bakta 1.11.4 + AMR guard</span></span>
-                  <span class="o">results/annotation/&lt;s&gt;/&lt;s&gt;.{gff3,faa,ffn,gbff,tsv,txt}</span>
-                  <span class="why">→ 8, which takes the .faa</span>
-                <ul>
-                  <li><span class="p">8 CARVEME<span class="v">CarveMe 1.6.6 · SCIP</span></span>
-                      <span class="o">results/models/carveme/&lt;s&gt;/&lt;s&gt;.xml</span>
-                      <span class="why">the model; also .faa and the diamond .tsv. The .faa is staged into a private copy first</span>
-                    <ul>
-                      <li><span class="p">9 GROWTH_CHECK<span class="v">COBRApy 0.32.1 · GLPK</span></span>
-                          <span class="o">results/models/growth/{growth_mqc.tsv, growth.tsv}</span>
-                          <span class="why">all models at once → MultiQC; emits the trigger 10 waits on</span></li>
-                      <li><span class="p">10 MEMOTE<span class="v">MEMOTE 0.17.0</span></span>
-                          <span class="o">results/models/memote/&lt;s&gt;/{index.html, memote_result.json, memote_summary.tsv}</span>
-                          <span class="why">→ MultiQC: tsv as a table, html embedded per sample</span></li>
-                    </ul>
-                  </li>
-                </ul>
-              </li>
-            </ul>
-          </li>
-        </ul>
-      </li>
-    </ul>
-  </li>
-</ul>
-
-<div class="collector">
-  <h4>11 · MULTIQC — the collector, one task for the whole cohort</h4>
-  <p class="small">It waits for everything above and reads exactly these groups (no directory
-  scanning; each is an explicit file list):</p>
-  <table>
-    <thead><tr><th>fed by</th><th>files</th></tr></thead>
-    <tbody>
-      <tr><td>1 FASTQC_RAW / 3 FASTQC_TRIMMED</td><td><code>results/qc/fastqc_raw/*_fastqc.zip</code>, <code>results/qc/fastqc_trimmed/*_paired_fastqc.zip</code></td></tr>
-      <tr><td>5 QUAST</td><td><code>results/qc/quast/&lt;s&gt;/report.tsv</code> (table) and <code>report.html</code> (embedded)</td></tr>
-      <tr><td>5b ASSEMBLY_REF</td><td><code>results/qc/refcompare/&lt;s&gt;/&lt;s&gt;_assembly_ref_mqc.tsv</code></td></tr>
-      <tr><td>6 BUSCO</td><td><code>results/qc/busco/&lt;s&gt;/short_summary*.txt</code> (staged by symlink)</td></tr>
-      <tr><td>7–10</td><td>CarveMe model size, MEMOTE scores and full pages, growth + yield, per-step runtimes (built by <code>scripts/multiqc_extras.py</code>)</td></tr>
-      <tr><td>engine / pipeline</td><td><code>custom_content/nextflow_mqc_versions.yaml</code> — the versions table row, written at run time</td></tr>
-    </tbody>
-  </table>
-  <p><b>output</b> <span class="o">results/report/multiqc_report.html</span>
-     <span class="o">results/report/multiqc_report_data/</span>
-</p>
-  <p class="small"><b>engine, every run</b> (not MultiQC): <span class="o">results/report/nextflow/report.html</span>
-     <span class="o">results/report/nextflow/trace.tsv</span> — Nextflow's own execution report and trace,
-     pinned there by <code>nextflow.config</code> so they do not land in the project root.</p>
-</div>
+<figure class="figure">
+<!-- BEGIN pipeline diagram (generated by docs/make_pipeline_diagram.py) -->
+<svg class="pd" viewBox="0 0 1280 578" width="100%" role="img" aria-label="Pipeline flow chart: reads to a metabolic model and one report" xmlns="http://www.w3.org/2000/svg"><style>
+.pd { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+.pd text { text-anchor:middle; }
+.pd .pd-name { font-size:12.5px; font-weight:700; letter-spacing:.3px; }
+.pd .pd-tool { font-size:8.6px; }
+.pd .pd-art  { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:8.6px; }
+.pd .pd-step { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:10px;
+               font-weight:700; }
+.pd .pd-elabel { font-size:9px; font-style:italic; fill:#535f6d;
+                 paint-order:stroke; stroke:#fbfcfd; stroke-width:3px;
+                 stroke-linejoin:round; }
+.pd .pd-opt { opacity:.9; }
+@media print { .pd .pd-elabel { stroke:#fff; } }
+</style><defs><marker id="pd-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#0f223d"/></marker><marker id="pd-arw-sm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0,1.6 L9,5 L0,8.4 z" fill="#0f223d"/></marker><marker id="pd-arw-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#178fa0"/></marker></defs><g class="pd-edges"><path class="" d="M204.0,120.0 L276.0,120.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M120.0,173.0 C120.0,235.7 118.0,224.3 118.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M360.0,173.0 C360.0,235.7 290.0,224.3 290.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M444.0,120.0 L516.0,120.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M600.0,173.0 C600.0,235.7 462.0,224.3 462.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M600.0,173.0 C600.0,235.7 634.0,224.3 634.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M600.0,173.0 C600.0,235.7 806.0,224.3 806.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M684.0,120.0 L756.0,120.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M924.0,120.0 L996.0,120.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M1080.0,173.0 C1080.0,235.7 978.0,224.3 978.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M1080.0,173.0 C1080.0,235.7 1150.0,224.3 1150.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.6" marker-end="url(#pd-arw)"/><path class="" d="M1037.0,287.0 Q1064.0,257.0 1091.0,287.0" fill="none" stroke-linecap="round" stroke="#0f223d" stroke-width="1.5" stroke-dasharray="2 3" marker-end="url(#pd-arw-sm)"/><path class="" d="M118.0,393.0 L118.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M290.0,393.0 L290.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M462.0,393.0 L462.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="pd-opt" d="M634.0,393.0 L634.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M806.0,393.0 L806.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M978.0,393.0 L978.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M1150.0,393.0 L1150.0,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M1164.0,120.0 L1236.0,120.0 Q1248,120.0 1248,418.0L1248,430" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><path class="" d="M700,430 L700,470" fill="none" stroke-linecap="round" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#pd-arw-teal)"/><line x1="118" y1="430" x2="1248" y2="430" stroke="#178fa0" stroke-width="1.6" stroke-dasharray="5 4"/><circle cx="118" cy="430" r="2.4" fill="#178fa0"/><circle cx="290" cy="430" r="2.4" fill="#178fa0"/><circle cx="462" cy="430" r="2.4" fill="#178fa0"/><circle cx="634" cy="430" r="2.4" fill="#178fa0"/><circle cx="806" cy="430" r="2.4" fill="#178fa0"/><circle cx="978" cy="430" r="2.4" fill="#178fa0"/><circle cx="1150" cy="430" r="2.4" fill="#178fa0"/><circle cx="700" cy="430" r="2.4" fill="#178fa0"/></g><g class="pd-labels"><text class="pd-elabel" x="264" y="280" text-anchor="end">paired</text><text class="pd-elabel" x="480" y="111" text-anchor="middle">paired only</text><text class="pd-elabel" x="720" y="111" text-anchor="middle">contigs</text><text class="pd-elabel" x="960" y="111" text-anchor="middle">.faa</text><text class="pd-elabel" x="1124" y="280" text-anchor="end">model.xml</text></g><g class="pd-nodes"><g class="pd-node"><rect x="36" y="67" width="168" height="106" rx="9" fill="#ffffff" stroke="#178fa0" stroke-width="1.2"/><circle cx="53" cy="84" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="53" y="87.6" fill="#ffffff">in</text><text class="pd-name" x="120" y="107" fill="#0f223d">RAW READS</text><text class="pd-tool" x="120" y="122" fill="#535f6d">from samples.tsv (fq1, fq2)</text><line x1="52" y1="130.5" x2="188" y2="130.5" stroke="#d3dae3" stroke-width="1"/><text class="pd-art" x="120" y="145" fill="#0f223d">&lt;s&gt;_1.fastq.gz</text><text class="pd-art" x="120" y="158" fill="#0f223d">&lt;s&gt;_2.fastq.gz</text></g><g class="pd-node"><rect x="276" y="67" width="168" height="106" rx="9" fill="#0f223d" stroke="#0b1a30" stroke-width="1.2"/><circle cx="293" cy="84" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="293" y="87.6" fill="#0f223d">2</text><text class="pd-name" x="360" y="107" fill="#ffffff">TRIMMOMATIC</text><text class="pd-tool" x="360" y="122" fill="#a9c2d6">Trimmomatic 0.39 · JDK 17</text><line x1="292" y1="130.5" x2="428" y2="130.5" stroke="#33506f" stroke-width="1"/><text class="pd-art" x="360" y="145" fill="#ffd9a3">&lt;s&gt;_R{1,2}_paired.fastq.gz</text><text class="pd-art" x="360" y="158" fill="#ffd9a3">&lt;s&gt;_R{1,2}_unpaired.fastq.gz</text></g><g class="pd-node"><rect x="516" y="67" width="168" height="106" rx="9" fill="#0f223d" stroke="#0b1a30" stroke-width="1.2"/><circle cx="533" cy="84" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="533" y="87.6" fill="#0f223d">4</text><text class="pd-name" x="600" y="107" fill="#ffffff">SPADES</text><text class="pd-tool" x="600" y="122" fill="#a9c2d6">SPAdes 4.0.0 · --careful</text><line x1="532" y1="130.5" x2="668" y2="130.5" stroke="#33506f" stroke-width="1"/><text class="pd-art" x="600" y="145" fill="#ffd9a3">contigs.fasta</text></g><g class="pd-node"><rect x="756" y="67" width="168" height="106" rx="9" fill="#0f223d" stroke="#0b1a30" stroke-width="1.2"/><circle cx="773" cy="84" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="773" y="87.6" fill="#0f223d">7</text><text class="pd-name" x="840" y="107" fill="#ffffff">BAKTA</text><text class="pd-tool" x="840" y="122" fill="#a9c2d6">Bakta 1.11.4 + AMR guard</text><line x1="772" y1="130.5" x2="908" y2="130.5" stroke="#33506f" stroke-width="1"/><text class="pd-art" x="840" y="145" fill="#ffd9a3">&lt;s&gt;.faa · .gff3 · .tsv</text><text class="pd-art" x="840" y="158" fill="#ffd9a3">&lt;s&gt;.ffn · .gbff · .txt</text></g><g class="pd-node"><rect x="996" y="67" width="168" height="106" rx="9" fill="#0f223d" stroke="#0b1a30" stroke-width="1.2"/><circle cx="1013" cy="84" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="1013" y="87.6" fill="#0f223d">8</text><text class="pd-name" x="1080" y="107" fill="#ffffff">CARVEME</text><text class="pd-tool" x="1080" y="122" fill="#a9c2d6">CarveMe 1.6.6 · SCIP</text><line x1="1012" y1="130.5" x2="1148" y2="130.5" stroke="#33506f" stroke-width="1"/><text class="pd-art" x="1080" y="145" fill="#ffd9a3">&lt;s&gt;.xml</text><text class="pd-art" x="1080" y="158" fill="#ffd9a3">+ .faa, diamond .tsv</text></g><g class="pd-node"><rect x="43" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="60" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="60" y="307.6" fill="#178fa0">1</text><text class="pd-name" x="118" y="327" fill="#ffffff">FASTQC_RAW</text><text class="pd-tool" x="118" y="342" fill="#d6eef2">FastQC 0.12.1</text><line x1="59" y1="350.5" x2="177" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="118" y="365" fill="#ffe6b8">fastqc.zip</text><text class="pd-art" x="118" y="378" fill="#ffe6b8">fastqc.html</text></g><g class="pd-node"><rect x="215" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="232" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="232" y="307.6" fill="#178fa0">3</text><text class="pd-name" x="290" y="327" fill="#ffffff">FASTQC_TRIMMED</text><text class="pd-tool" x="290" y="342" fill="#d6eef2">FastQC 0.12.1</text><line x1="231" y1="350.5" x2="349" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="290" y="365" fill="#ffe6b8">paired_fastqc.zip</text></g><g class="pd-node"><rect x="387" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="404" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="404" y="307.6" fill="#178fa0">5</text><text class="pd-name" x="462" y="327" fill="#ffffff">QUAST</text><text class="pd-tool" x="462" y="342" fill="#d6eef2">QUAST 5.2.0</text><line x1="403" y1="350.5" x2="521" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="462" y="365" fill="#ffe6b8">report.tsv</text><text class="pd-art" x="462" y="378" fill="#ffe6b8">report.html</text></g><g class="pd-node"><rect x="559" y="287" width="150" height="106" rx="9" fill="#5d6b7a" stroke="#4b5866" stroke-width="1.2"/><circle cx="576" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="576" y="307.6" fill="#5d6b7a">5b</text><text class="pd-name" x="634" y="327" fill="#ffffff">ASSEMBLY_REF</text><text class="pd-tool" x="634" y="342" fill="#d6dee7">BLASTN 2.17.0 · optional</text><line x1="575" y1="350.5" x2="693" y2="350.5" stroke="#7d8b9a" stroke-width="1"/><text class="pd-art" x="634" y="365" fill="#ffe6b8">refcomp.tsv</text><text class="pd-art" x="634" y="378" fill="#ffe6b8">assembly_ref_mqc.tsv</text></g><g class="pd-node"><rect x="731" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="748" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="748" y="307.6" fill="#178fa0">6</text><text class="pd-name" x="806" y="327" fill="#ffffff">BUSCO</text><text class="pd-tool" x="806" y="342" fill="#d6eef2">BUSCO 5.8.3 · 440 markers</text><line x1="747" y1="350.5" x2="865" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="806" y="365" fill="#ffe6b8">short_summary.txt</text></g><g class="pd-node"><rect x="903" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="920" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="920" y="307.6" fill="#178fa0">9</text><text class="pd-name" x="978" y="327" fill="#ffffff">GROWTH_CHECK</text><text class="pd-tool" x="978" y="342" fill="#d6eef2">COBRApy 0.32.1 · GLPK</text><line x1="919" y1="350.5" x2="1037" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="978" y="365" fill="#ffe6b8">growth.tsv</text><text class="pd-art" x="978" y="378" fill="#ffe6b8">1 task · all models</text></g><g class="pd-node"><rect x="1075" y="287" width="150" height="106" rx="9" fill="#178fa0" stroke="#0f7280" stroke-width="1.2"/><circle cx="1092" cy="304" r="11" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="1092" y="307.6" fill="#178fa0">10</text><text class="pd-name" x="1150" y="327" fill="#ffffff">MEMOTE</text><text class="pd-tool" x="1150" y="342" fill="#d6eef2">MEMOTE 0.17.0</text><line x1="1091" y1="350.5" x2="1209" y2="350.5" stroke="#4fa9b6" stroke-width="1"/><text class="pd-art" x="1150" y="365" fill="#ffe6b8">memote_result.json</text><text class="pd-art" x="1150" y="378" fill="#ffe6b8">index.html</text></g><g class="pd-node"><rect x="60" y="470" width="1170" height="92" rx="10" fill="#b06a00" stroke="#8a5300" stroke-width="1.2"/><circle cx="86" cy="516" r="12.5" fill="#ffffff" opacity="0.94"/><text class="pd-step" x="86" y="520" fill="#b06a00">11</text><text class="pd-name" x="685" y="508" fill="#ffffff" text-anchor="middle">MULTIQC</text><text class="pd-tool" x="685" y="524" fill="#ffe0b8">MultiQC 1.21 · one task for the whole cohort</text><text class="pd-art" x="685" y="541" fill="#fff3dd">multiqc_report.html  ·  multiqc_report_data/</text></g></g></svg>
+<!-- END pipeline diagram -->
+<figcaption><b>Left to right, then top to bottom.</b> Steps 1 and 2 both start from the
+raw pair and are <i>not</i> ordered against each other — FastQC is not a gate for trimming.
+SPAdes consumes the <b>paired</b> trimmed reads only; the unpaired leftovers are published
+but never read again. Steps 5, 5b and 6 hang off the assembly while 7 continues it. Step 9
+is one task for the whole cohort and must finish before step 10 starts (the dotted arc).
+Step 11 waits for every report input and writes the one HTML file. The figure is generated
+by <code>docs/make_pipeline_diagram.py</code>, which refuses to emit an edge that leaves a
+box on the wrong side, crosses another box, or a label wider than its box.</figcaption>
+</figure>
 
 <p class="legend">
-  <span><span class="swatch" style="background:#0f223d"></span> process (tool + version)</span>
+  <span><i class="rule"></i> a file is handed to the next step</span>
+  <span><i class="rule dotted"></i> ordering only — no file passes</span>
+  <span><i class="rule dashed"></i> read into the report by MULTIQC (by path)</span>
+</p>
+<p class="legend">
+  <span><span class="swatch" style="background:#0f223d"></span> data path</span>
+  <span><span class="swatch" style="background:#178fa0"></span> report input, per sample</span>
   <span><span class="swatch" style="background:#5d6b7a"></span> optional step</span>
-  <span><span class="swatch" style="background:#eef2f6;border:1px solid #d3dae3"></span> artifact (path pattern)</span>
+  <span><span class="swatch" style="background:#b06a00"></span> collector, one task per cohort</span>
 </p>
 
-<div class="note"><b>Two facts about this graph that surprise people — and one correction.</b>
+<div class="collector">
+  <h4>11 · MULTIQC — what it reads, exactly</h4>
+  <p class="small">It waits for every step above, then reads files named from the sample
+  sheet: the cohort never comes from a directory scan, so a subset run yields a consistent
+  subset report.</p>
+  <table>
+    <thead><tr><th>fed by</th><th>what MULTIQC gets</th></tr></thead>
+    <tbody>
+      <tr><td>1 FASTQC_RAW · 3 FASTQC_TRIMMED</td><td><code>results/qc/fastqc_raw/*_fastqc.zip</code>, <code>results/qc/fastqc_trimmed/*_paired_fastqc.zip</code> — the built-in FastQC module</td></tr>
+      <tr><td>5 QUAST</td><td><code>results/qc/quast/&lt;s&gt;/report.tsv</code> as a table, <code>report.html</code> embedded as an interactive iframe</td></tr>
+      <tr><td>5b ASSEMBLY_REF</td><td><code>results/qc/refcompare/&lt;s&gt;/&lt;s&gt;_assembly_ref_mqc.tsv</code> — one table for the cohort, absent when no row names a reference</td></tr>
+      <tr><td>6 BUSCO</td><td><code>results/qc/busco/&lt;s&gt;/short_summary.specific.*.txt</code>, staged by symlink per sample</td></tr>
+      <tr><td>8 CARVEME</td><td>reactions / metabolites / genes / compartments per model, read from the SBML — the table and the General Statistics columns, built by <code>scripts/multiqc_extras.py</code></td></tr>
+      <tr><td>9 GROWTH_CHECK</td><td><code>results/models/growth/growth_mqc.tsv</code> — one row per sample, one section</td></tr>
+      <tr><td>10 MEMOTE</td><td><code>memote_summary.tsv</code> as a table, <code>index.html</code> embedded per sample</td></tr>
+      <tr><td>every step</td><td>wall time per step from <code>benchmarks/</code>, and the versions row written at run time</td></tr>
+    </tbody>
+  </table>
+  <p><b>output</b> <span class="o">results/report/multiqc_report.html</span> and
+     <span class="o">results/report/multiqc_report_data/</span></p>
+  <p class="small"><b>engine, every run</b> (not MultiQC): <span class="o">results/report/nextflow/report.html</span>
+     <span class="o">results/report/nextflow/trace.tsv</span> — Nextflow's own execution report and
+     trace, pinned there by <code>nextflow.config</code> so they do not land in the project root.</p>
+</div>
+
+<div class="note"><b>Three things this graph says that are easy to get wrong — and one correction.</b>
 <ol>
   <li>Steps 1 and 2 are <b>parallel branches</b> off the same input. FastQC is not a gate for
       trimming, so killing FastQC does not stop the assembly. That is why the failure-isolation
       test kills <i>both</i> entry points.</li>
   <li>Everything from step 4 onwards is per sample and independent: one sample failing does not
-      stop the other (<code>errorStrategy = 'finish'</code>).</li>
-  <li><b>Correction (2026-10-22).</b> An earlier version of this page drew an edge from the raw
-      FASTQ straight to SPAdes. That was a drawing error on our side, not the pipeline:
-      <code>main.nf</code> wires <code>SPADES(TRIMMOMATIC.out.map { … })</code> and the process
-      declares <code>path(r1_paired), path(r2_paired)</code>, so Spades consumes the
-      <b>trimmed paired</b> reads. Nothing downstream ever reads the raw files except
-      FASTQC_RAW and TRIMMOMATIC.</li>
+      stop the other (<code>errorStrategy = 'finish'</code>). The two exceptions are steps 9
+      and 11, which are single cohort-level tasks.</li>
+  <li>Step 9 is <b>not</b> a descendant of step 10 by data — no file passes between them. The
+      edge exists so that a model which cannot grow on the declared medium is reported
+      <i>before</i> a 250-second-per-sample MEMOTE run scores it in detail (F29).</li>
+  <li><b>Correction (2026-10-22).</b> An earlier version of this page was a hand-drawn ASCII
+      sketch, and it drew an edge from the raw FASTQ straight to SPAdes. That was a drawing
+      error on our side, not the pipeline: <code>main.nf</code> wires
+      <code>SPADES(TRIMMOMATIC.out.map { … })</code> and the process declares
+      <code>path(r1_paired), path(r2_paired)</code>, so Spades consumes the <b>trimmed
+      paired</b> reads. The sketch is gone; this figure is generated from a declared edge list
+      and is geometry-checked before it is written, which is what would have caught it.</li>
 </ol></div>
 
 <h4>What runs in parallel, and what does not</h4>

@@ -28,6 +28,11 @@ m0probe/published/
 # redirected here by tests/ci/ci.config so no check can touch validated data.
 tests/ci/out/
 
+# ---- Never committed --------------------------------------------------------
+# SKILL.md is an internal competency map written for AI agents working on this
+# repo. It is deliberately not part of the published project.
+/SKILL.md
+
 # ---- Tooling / OS noise -----------------------------------------------------
 __pycache__/
 *.pyc
