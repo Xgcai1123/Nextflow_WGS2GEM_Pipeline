@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`docs/justification.md` — the per-decision answer sheet for reviewers.** The existing docs are
+  organised by report artifact and column ("what does N50 mean"), which is not the axis a reviewer
+  asks along ("why Trimmomatic and not fastp"), so a complete field guide can still feel
+  unanswerable. The new sheet is organised by decision, and its backbone is a three-class taxonomy
+  of every parameter: **inherited** from the original pipeline (strong evidence, because the
+  byte-identical comparison checks it), **tool defaults** (evidence: the manual — we added no
+  constraint), and **conventions** chosen by us with no experimental basis — the growth medium's
+  uptake bounds, db-light instead of db-full, free solvers. The third class is declared as such
+  rather than dressed up as evidence, which is exactly what makes the other two credible. Content:
+  twelve steps x five questions (what does it decide / why this tool / what do the parameters mean
+  in one sentence / what breaks downstream / what will a reviewer ask), ten rehearsed answers to
+  the questions that actually come up, a plain-language glossary of the report's jargon (N50, BUSCO
+  complete/duplicated/fragmented, MEMOTE total score, exchange vs biomass reaction, uptake bound,
+  yield), and a readability ladder (30 seconds / 3 minutes / deep dive). Written in Chinese on
+  purpose: the person preparing the defence reads Chinese, and a document that cannot be skimmed in
+  one pass does not exist. It states plainly what the project's strongest honest sentence is — the
+  parameters are not ours, they are the original pipeline's, kept so the outputs compare byte for
+  byte, and the two steps we added carry their own evidence and finding numbers. `interpretation.md`
+  and `README.md` now point at it, and it is cross-referenced from the README's "new to the output"
+  block.
+
 - **`docs/interpretation.md` is now a field guide plus a reviewer Q&A.** Section 2 documents every
   column of every table in the report — unit, denominator, this project's value, and how to judge
   it — and section 3 answers the twenty questions that actually come up. Two of them are cases

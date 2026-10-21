@@ -2,7 +2,7 @@
 
 Generated from `git ls-files` at `%s` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
 
-67 tracked files, in the order you would read them:
+68 tracked files, in the order you would read them:
 
 ## The pipeline you run (4 files)
 
@@ -124,7 +124,7 @@ WGSpipeline-nextflow/
         └── run-stub-smoke.sh
 ```
 
-## Documentation (11 files)
+## Documentation (12 files)
 
 Entry points (README), the change log, the design record, and this tree.
 
@@ -133,6 +133,7 @@ WGSpipeline-nextflow/
 ├── docs/
 │   ├── asset-sources.md
 │   ├── interpretation.md
+│   ├── justification.md
 │   ├── make_pipeline_diagram.py
 │   ├── make_structure.py
 │   ├── nextflow-port-design.md

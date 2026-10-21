@@ -18,6 +18,11 @@ Reference points throughout are this project's two validation isolates:
 
 ---
 
+> **Looking for "why this tool / why this parameter"?** This file is organised by
+> *report table*: it tells you how to read each number. The *decisions* behind them —
+> which parameters are inherited from the original pipeline, which are tool defaults,
+> and which are conventions with no evidence — are in **`docs/justification.md`**.
+
 ## 1. A successful run, at a glance
 
 Exit code 0, `results/report/multiqc_report.html` written, and per sample roughly:

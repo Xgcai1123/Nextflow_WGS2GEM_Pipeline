@@ -171,6 +171,11 @@ Snakemake tree — content is still byte-comparable, only the paths moved (F33/D
 >
 > New to the output? **[docs/interpretation.md](docs/interpretation.md)** explains every
 > number in it: what it means, when it indicates a problem, and what it does not prove.
+>
+> Defending a choice? **[docs/justification.md](docs/justification.md)** answers *why* per
+> decision, not per column: which parameters are inherited from the original pipeline, which
+> are tool defaults, and which are **conventions with no evidence behind them** — plus ten
+> rehearsed answers and a plain-language glossary.
 
 - orders **report sections and General Statistics columns by pipeline step**
   (FastQC → QUAST → assembly vs reference → BUSCO → CarveMe → growth → MEMOTE → runtimes
