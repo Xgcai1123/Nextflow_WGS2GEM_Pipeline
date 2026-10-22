@@ -191,6 +191,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BAKTA had been broken since the F33 change, and a clean re-run finally said so.** F33 moved the
+  AMR-guard cache from `db/amr_guard/` to `data/cache/amr_guard/` by adding
+  `export \$WGS_AMR_GUARD_CACHE=${params.amr_cache}` to the process script. The escaped `\$` turns
+  that into `export $VAR=/path`: an unset variable expanded in an *assignment* position, and every
+  task wrapper runs `bash -ue`, so the task aborted with `unbound variable` before `bakta` started.
+  Nothing caught it for a day: the line arrived after the last real BAKTA run, every CI check is a
+  `-stub-run`, and a stub block *replaces* the script — the F18 class of defect, reachable only by
+  executing the real tool. It surfaced the moment the cache cleanup made a fresh, uncached run
+  necessary, and `errorStrategy = 'finish'` turned it into a loud exit 1 rather than a report with a
+  missing annotation section. Fixed by dropping the escape, plus a static guard in
+  `tests/ci/run-lint.sh` that flags `\$NAME=` in an assignment position (comment lines excluded, or
+  the guard would match its own explanation); verified by mutation — reinstating the `\$` makes lint
+  fail with the line number. The rule recorded for later: F10's "escape shell variables as `\$VAR`"
+  applies to *uses*, never to assignment targets. Design doc F43.
+
+- **A run that looked 4-5x slower than baseline was the host, not the code — and two cheap
+  mechanisms now say so out loud.** During the clean re-run, 12 of 25 tasks took 55 minutes against
+  a 38-minute whole-run baseline. Forensics: SPADES#1 reached K99 in 3m46s (baseline-comparable)
+  and then spent 27 minutes in the single-threaded graph construction; the engine's own poll
+  interval stretched from 5 s to 296 s; `jcmd Thread.print` showed `Task submitter` parked in
+  `TaskPollingMonitor.awaitSlots` while four downstream `workDir`s stayed empty; `vm.loadavg` read
+  34-37 on 8 cores **and stayed at 29 after every pipeline process was killed**. A process census
+  put it at 9 of ours against ~480 others (Firefox 17, Chrome 17, VS Code 10, Office/ClassIn 12,
+  Spotify 9, Spotlight 16), with `tmutil status` showing no backup. Single-threaded stages get
+  ~1/30 of a core under that load, which is why the run was normal for four minutes and then
+  collapsed — the asymmetry is what made it look like a defect. Fixes: the checkout now carries
+  `.metadata_never_index` (git-ignored) so Spotlight stops tagging the ~150k files `work/` churns
+  per run; `bin/pipeline-clean` warns when it removes more than 20,000 files that macOS will now
+  reindex and that a slow follow-up run is the host (threshold overridable via
+  `PIPELINE_CLEAN_SPOTLIGHT_FILES`, asserted both ways in CI); and every timing claim now has to
+  carry `vm.loadavg` and the core count — the old 38-minute baseline is not comparable for exactly
+  that reason. Design doc F42. The `awaitSlots` question is explicitly left open: SPADES declares
+  `cpus = 8` on an 8-core host, which looks like slot accounting, but four FASTQC tasks (4 cpus
+  each) plus two Trimmomatic tasks (8 cpus each) did run concurrently earlier, so the mechanism is
+  not established and needs an idle-host experiment.
+
 - **The disk pre-flight now points at `bin/pipeline-clean` instead of at two raw `rm -rf` lines.**
   The F20 guard's advice was `rm -rf work` and `rm -rf .nextflow/conda`, printed exactly when the
   volume is full and nobody is reading carefully — two paths that happen to be right today and that

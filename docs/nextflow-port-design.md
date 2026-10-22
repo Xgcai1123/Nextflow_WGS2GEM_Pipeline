@@ -1156,6 +1156,22 @@ profiles {
   - **一次被当场纠正的界线错误**:初版把 `.nextflow/cache` 与 `data/cache/` 划在 `all` 档,理由是"引擎记账、无害"。用户复核后指出:"不只是 output,中间产物都要删"——`cache` 是引擎自己写出来的中间产物,`data/cache/` 是 AMR guard 写的中间产物,二者都该归 `outputs`,不该让用户为了删中间产物去动必须联网重建的环境。已上移。现在 `outputs` 与 `all` 的唯一差别是 **conda 环境**,理由收敛为一条可检验的事实:它是整棵树上唯一需要联网(~5.7 GiB 下载)才能回来的东西。
   - 设计:三级(`check` 默认不删 / `outputs` 删全部产物与中间产物但保留 conda 环境 / `all` 连环境),删除表是**允许清单**,每条路径删除前再复核一次(相对路径、无 `..`、非软链接、父目录 realpath 在仓库内、不是申报输入),输入在清理前后各盘点一次并比对,不符即 exit 1 并打印差异。两个负对照写进 CI:非终端且无 `--yes` 必须拒绝;把 `data/raw` 注入**副本**的删除表后仍须被"申报输入"那条拒掉——即允许清单不是最后一道防线。
 
+- **F42 一次"看起来像管线坏了"的慢:主机负载,不是代码(2026-10-22)**：清空重跑时,25 个任务跑到第 12 个(SPADES#2)就用了 55 分钟,而基线是 38 分钟跑完全部。逐层取证后归因于主机,不是管线:
+  - **形态**:SPADES#1 内部日志到 K99 只用 **3:46**(与基线同量级),之后 **27 分钟**全耗在 K99 的单线程图构建上;SPADES#2 同样只走到 K127 就耗尽 55 分钟。
+  - **引擎自身的读数**:`TaskPollingMonitor` 的轮询周期从设计的 **5 s** 变成 **296 s**(60×),这是 JVM 抢不到 CPU 的直接证据。线程栈(`jcmd Thread.print`)显示 `Task submitter` 停在 `TaskPollingMonitor.awaitSlots`,4 个下游任务的 `workDir` 是空的。
+  - **负载归属**:`vm.loadavg` 34–37(8 核);把管线进程**全部杀掉后 30 秒均值仍是 29** —— 负载不是我们造的。进程普查:我们 9 个进程,其余约 480 个,主要是浏览器(`plugin-container` 17、`Google` 17)、编辑器(`Visual` 10)、办公/通讯(`Microsoft` 7、ClassIn 5)、媒体(Spotify 9),外加 Spotlight(`mdworker_shared` 16)。`tmutil status` 的 `Running = 0`,可排除 Time Machine。
+  - **机制**:单线程阶段(图构建、报告生成)在 30+ 可运行线程里只能分到约 1/30 的 CPU,所以"前 4 分钟正常、后面突然慢";8 线程阶段受影响小得多 —— 这个非对称正是误判的成因。
+  - **触发/放大**:当天为验收清理了约 20 万个文件(6.8 GB `.snakemake/conda`、2.4 GB `work/`、183 MB `.nextflow/cache`),fsevents 队列让 Spotlight 的积压雪上加霜。
+  - **修复**:①仓库根放 `.metadata_never_index`(已 gitignore),让 mds 不再索引这个 checkout —— `work/` 每跑一次就churn 约 15 万文件,这个代价本来每跑一次都要付;②`bin/pipeline-clean` 在删除超过 20 000 个文件时打印"接下来会重索引、慢的是主机不是管线",阈值可用 `PIPELINE_CLEAN_SPOTLIGHT_FILES` 覆盖并在 `run-clean-check.sh` 里**双向断言**(超过要报警、低于要沉默);③验收计时必须附 `vm.loadavg` 与核数,否则"耗时"这个数不可比 —— 旧基线 38 分钟恰恰缺这个条件。
+  - **已结(F44)**:`awaitSlots` 的机制用任务完成时刻钉死了 —— local executor 的**槽位 = 核数(nproc),每个任务按自己声明的 `cpus` 占槽**。证据:4 个 FASTQC_RAW(各 4 cpus)是**两个两个**完成的(13:27:12/13:27:14,13:27:22/13:27:24);2 个 TRIMMOMATIC(各 8 cpus)**串行**完成(13:27:50 / 13:28:24);SPADES(8 cpus)独占期间,4 个下游任务在 `awaitSlots` 干等 65 分钟;修复后在读数 3.9–14 的负载下,2 个 BAKTA(各 4)与 2 个 CARVEME(各 4)都是**并发**执行的。所以"早期一批任务同时 submit"不等于同时运行 —— submit 不看槽位,运行才看。
+  - **这条不是缺陷,是引擎正确行为**(从不超订);但它的后果值得写进性能一节:在 8 核机器上 `threads_default = 8` 让 SPADES/TRIMMOMATIC 独占全部槽位,重型步骤实际是串行的;`-profile lowmem`(两者降到 4)反而可能让 SPADES 与 BAKTA/CARVEME 重叠,总时长更短 —— 这是**下一个可测量的假设**,不是结论(未测)。
+
+- **F43 `export \$VAR=` 让 BAKTA 从 10-21 起一直是坏的,而所有自动化检查都没抓到(2026-10-22 清空重跑时暴露)**:F33 把 AMR-guard 缓存从 `db/amr_guard/` 挪到 `data/cache/amr_guard/`,做法是在 BAKTA 的 `script:` 里加一行 `export \$WGS_AMR_GUARD_CACHE=${params.amr_cache}`。`\$` 把 `$` 转义了,shell 看到的是 `export $VAR=/path` —— **在赋值位置展开一个未定义的变量**;而每个任务 wrapper 都是 `bash -ue`,于是任务在 `bakta` 启动之前就以 `unbound variable` 退出。
+  - **为什么一直没被发现**:①该行由 F33(10-21)引入,之后只跑过 `-stub-run`;②stub 块会**替换整个 script**,干跑永远走不到这一行;③它只在真实执行 BAKTA(第 7 步)时触发;④CI 里所有 Nextflow 检查都是 stub。这与 F18 同类:**只有真跑才会现形的缺陷**。
+  - **怎么抓到的**:本次清空后 `-resume` 全量重跑,BAKTA 第一次在新代码下真正执行,`.command.sh` 第 11 行报错,`errorStrategy = 'finish'` 让整跑以 exit 1 结束 —— 也就是"宁可失败也不静默降级"这条设计起了作用。
+  - **修法**:去掉 `\$`(赋值目标永远不该被转义);并在 `run-lint.sh` 加静态守卫(跳过注释行,否则守卫会匹配自己的说明文字),负对照实测:把 `\$` 放回去,lint 立即 FAIL 并打印行号。
+  - **规则修正**:F10 的"script 里的 shell 变量要写成 `\$VAR`"只适用于**使用**,不适用于**赋值目标**。已写入 SKILL 的 pitfall 表。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式

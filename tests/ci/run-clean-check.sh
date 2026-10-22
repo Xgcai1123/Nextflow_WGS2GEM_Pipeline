@@ -182,4 +182,25 @@ expect_grep "names the input refusal"                 "declared input" "${LOG}"
 [ -e "${FX}/data/raw/SRR1770413_1.fastq.gz" ] \
     && pass "reads survive a tampered table" || fail "reads survive a tampered table"
 
+# --- 8. the Spotlight note is a guard too, so it is tested both ways ----------
+# Deleting six figures of files leaves macOS reindexing them for a while, and a
+# slow follow-up run looks exactly like a pipeline defect (measured 2026-10-22:
+# load 34 on 8 cores, poll interval 5 s -> 296 s, single-threaded steps ~20x
+# slower). The threshold is overridable precisely so it can be asserted here
+# instead of trusted.
+echo "== macOS reindex note: fires above the threshold, silent below =="
+if [ "$(uname -s)" = "Darwin" ]; then
+    make_fixture
+    PIPELINE_CLEAN_SPOTLIGHT_FILES=1 run_clean outputs --yes
+    expect_eq   "outputs still exits 0" "0" "${LAST_STATUS}"
+    expect_grep "warns that Spotlight will reindex" "Spotlight will process those deletions" "${LOG}"
+    expect_grep "says the slowness is the host"     "check" "${LOG}"
+
+    make_fixture
+    PIPELINE_CLEAN_SPOTLIGHT_FILES=100000000 run_clean outputs --yes
+    expect_nogrep "stays silent on a small cleanup" "Spotlight will process" "${LOG}"
+else
+    pass "not macOS -- the reindex note is a no-op here"
+fi
+
 summary "run-clean-check"

@@ -34,6 +34,12 @@ tests/ci/out/
 /SKILL.md
 
 # ---- Tooling / OS noise -----------------------------------------------------
+# macOS Spotlight: an empty marker file that stops mds from indexing this tree.
+# `work/` churns ~150k files per run; without this, every run leaves the indexer
+# with a backlog that pins the machine for a long time (measured 2026-10-22:
+# load 34 on 8 cores, engine poll interval 5 s -> 296 s, single-threaded steps
+# ~20x slower). Reversible: delete the file.
+.metadata_never_index
 __pycache__/
 *.pyc
 .pytest_cache/

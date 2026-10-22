@@ -1,6 +1,6 @@
 # Project structure (the pipeline only)
 
-Generated from `git ls-files` at commit `fd27296` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
+Generated from `git ls-files` at commit `971049c` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
 
 71 tracked files, in the order you would read them:
 

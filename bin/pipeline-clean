@@ -385,9 +385,15 @@ inventory "${INV_BEFORE}"
 
 say ""
 removed=0
+removed_files=0
 for t in "${PLAN[@]}"; do
     [ -e "${t}" ] || continue
     validate_target "${t}"            # re-check immediately before removal
+    if [ -d "${t}" ]; then
+        removed_files=$((removed_files + $(count_files "${t}")))
+    else
+        removed_files=$((removed_files + 1))
+    fi
     printf '  removing %-28s %s\n' "${t#${ROOT}/}" "$(size_label "${t}")"
     # Finder keeps writing .DS_Store into directories as they empty, which makes
     # `rm -rf` exit "Directory not empty". A second pass clears the residue.
@@ -419,6 +425,20 @@ if [ -n "${BEFORE_KB}" ] && [ -n "${AFTER_KB}" ]; then
     freed_gb="$(awk -v b="${BEFORE_KB}" -v a="${AFTER_KB}" 'BEGIN {printf "%.2f", (a - b) / 1048576}')"
     info "reclaimed ${freed_gb} GiB (df before/after; ${removed} path(s) removed)"
     info "now $(human "$(df_free_kb)") free of $(human "$(df_total_kb)")"
+fi
+
+# macOS indexes every file a build churns through. Deleting six figures of them
+# leaves the indexer with a backlog that competes with the next run -- measured
+# 2026-10-22: ~200k files removed, load 34 on 8 cores, the engine's own poll
+# interval stretched 5 s -> 296 s and single-threaded steps ran ~20x slower.
+# That looked exactly like a pipeline defect until the load average was read.
+SPOTLIGHT_FILES="${PIPELINE_CLEAN_SPOTLIGHT_FILES:-20000}"
+if [ "$(uname -s)" = "Darwin" ] && [ "${removed_files}" -ge "${SPOTLIGHT_FILES}" ]; then
+    info "note: ${removed_files} files removed -- macOS Spotlight will process those deletions"
+    info "      and can keep the machine busy well after this script exits (load 34/8 cores"
+    info "      was measured). A slow next run is then the host, not the pipeline: check"
+    info "      'sysctl -n vm.loadavg'. To stop Spotlight indexing this checkout:"
+    info "        touch ${ROOT}/.metadata_never_index   # already in .gitignore"
 fi
 
 case "${LEVEL}" in

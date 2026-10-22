@@ -60,4 +60,19 @@ else
     fail "python3 not found -- cannot validate docs/make_pipeline_diagram.py"
 fi
 
+# --- shell escaping: an assignment target is never escaped (F43) -------------
+# `export \$VAR=value` inside a `script:` block expands an unset variable in an
+# assignment position. Every task wrapper runs `bash -ue`, so the task dies with
+# "unbound variable" before its tool starts -- which is how BAKTA sat broken from
+# 2026-10-21 until a clean re-run on 2026-10-22. No stub run can catch it: a stub
+# block *replaces* the script. So it is caught statically, here.
+# Comment lines are skipped on purpose: a shell comment inside a `script:` string
+# is where this rule is *explained*, so matching the explanation would make the
+# guard fail on its own documentation.
+if bad="$(grep -nE '\\\$[A-Za-z_][A-Za-z0-9_]*=' "${PROJECT_DIR}/main.nf" | grep -vE '^[0-9]+:[[:space:]]*#')"; then
+    fail "escaped variable in an assignment position -- the task will abort with 'unbound variable' (F43): ${bad}"
+else
+    pass "no escaped assignment targets in main.nf"
+fi
+
 summary "run-lint"

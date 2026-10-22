@@ -286,7 +286,10 @@ process BAKTA {
     # F33: the AMR-guard cache defaults to `<repo>/db/amr_guard/`, which put a
     # stray db/ at the project root. The script reads WGS_AMR_GUARD_CACHE (env), so the
     # cache moves under data/cache/ without touching the (byte-identical) asset.
-    export \$WGS_AMR_GUARD_CACHE=${params.amr_cache}
+    # F43: the assignment *target* is never escaped. `export \$VAR=...` expands an
+    # unset variable in an assignment position, and `bash -ue` (which every Nextflow
+    # task wrapper uses) aborts with "unbound variable" before bakta ever starts.
+    export WGS_AMR_GUARD_CACHE=${params.amr_cache}
     # Prepend the AMR-guard wrapper dir so it shadows the conda bakta entry
     # point (upstream ncbi/amr#191: one protein with overlapping NCBIFAM hits
     # kills the whole run).
