@@ -1,8 +1,8 @@
 # Project structure (the pipeline only)
 
-Generated from `git ls-files` at `%s` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
+Generated from `git ls-files` at commit `fd27296` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
 
-68 tracked files, in the order you would read them:
+71 tracked files, in the order you would read them:
 
 ## The pipeline you run (4 files)
 
@@ -43,13 +43,14 @@ WGSpipeline-nextflow/
     └── m9_aerobic.yaml
 ```
 
-## Helper programs called by tasks (10 files)
+## Helper programs called by tasks (11 files)
 
 Python/bash helpers the processes invoke; the reused ones are byte-identical (D4).
 
 ```
 WGSpipeline-nextflow/
 ├── bin/
+│   ├── pipeline-clean
 │   └── task_env.sh
 └── scripts/
     ├── amr_guard/
@@ -75,9 +76,9 @@ WGSpipeline-nextflow/
 └── multiqc_nextflow.yaml
 ```
 
-## Tests and CI (26 files)
+## Tests and CI (27 files)
 
-Seven local checks and the four-job workflow; nothing here runs tools.
+Eight local checks and the five-job workflow; nothing here runs tools.
 
 ```
 WGSpipeline-nextflow/
@@ -115,6 +116,7 @@ WGSpipeline-nextflow/
         ├── ignore-strategy.config
         ├── inject-sample-failure.config
         ├── lib.sh
+        ├── run-clean-check.sh
         ├── run-disk-guard.sh
         ├── run-embed-check.sh
         ├── run-failure-isolation.sh
@@ -124,7 +126,7 @@ WGSpipeline-nextflow/
         └── run-stub-smoke.sh
 ```
 
-## Documentation (12 files)
+## Documentation (13 files)
 
 Entry points (README), the change log, the design record, and this tree.
 
@@ -139,7 +141,8 @@ WGSpipeline-nextflow/
 │   ├── nextflow-port-design.md
 │   ├── pipeline-summary.html
 │   ├── project-structure.md
-│   └── project-structure.png
+│   ├── project-structure.png
+│   └── roadmap.md
 ├── CHANGELOG.md
 ├── LICENSE
 └── README.md

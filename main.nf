@@ -646,10 +646,12 @@ workflow {
             error """[disk-check] refusing to start: not enough free disk space.
   ${too_full.join('\n  ')}
 
-  Free space first -- both directories below are regenerable, only time is lost:
-    rm -rf ${params.project_dir}/work             # Nextflow task cache
-    rm -rf ${params.project_dir}/.nextflow/conda  # conda environments
-  Or tune the threshold: --min_free_disk_gb=<GB>, or --min_free_disk_gb=0 to skip the check."""
+  Free space first -- this checkout ships a tool that knows what is safe to delete
+  (it never touches data/raw, data/db, data/reference or any tracked file):
+    ${params.project_dir}/bin/pipeline-clean outputs --yes   # Nextflow task cache, results/, logs
+    ${params.project_dir}/bin/pipeline-clean all     --yes   # the above, plus the conda environments
+  Without --yes it only prints the plan. Or tune the threshold:
+  --min_free_disk_gb=<GB>, or --min_free_disk_gb=0 to skip the check."""
         }
     }
 

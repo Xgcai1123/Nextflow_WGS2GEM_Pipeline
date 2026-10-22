@@ -1149,6 +1149,13 @@ profiles {
   - 该检查并入 `tests/ci/run-lint.sh`(无需 Nextflow、0 秒),所以 CI 会一直守着这张图。
 - **F40 MULTIQC 少等 5b:一个真实存在的静默缺口(本次复核发现,2026-10-22)**：做 F39 时要把"11 谁等谁"画准,于是逐条核对 `up_ok` 的 `mix` 链,发现 **`ASSEMBLY_REF` 不在其中**。而 MULTIQC 的 `ref_section` 是**按路径**从 `${params.refcomp_dir}` 拷出来的,并且拷贝语句是 `if [ -f "$f" ]; then cp ...; fi`。也就是说:若 5b 尚未结束而 MULTIQC 抢先启动,参照比对这一章会**静默消失** —— 不报错、不警告,报告看上去完全正常。这与 F30 的立项目标(宁可失败也不静默降级)直接冲突,也和该段代码自己的注释("MULTIQC waits for all upstream steps")矛盾。实测两样本时 BLASTN 远快于 MEMOTE,所以从未触发,但这是**竞态**,不是保证。修法:把 `ASSEMBLY_REF.out` 加进 `up_ok`(空通道 `mix` 是 no-op,无参考的队列不受影响);任务数不变,发布物不变。附带记录:该边加入后 MULTIQC 的任务哈希变化,下一次 `-resume` 会重跑 MULTIQC —— 代价是一次报告重建,换来的是"要么完整、要么报错"。
 
+- **F41 清理的分级、边界与两条 `-resume` 实测(2026-10-22)**：需求是"一键清空,但原数据不能动,而且要先能空跑确认"。它同时照出两块此前没人验证过的空白:**删掉 `work/` 之后 `-resume` 到底做什么**,以及**只删 `results/` 能不能从缓存重生报告**。用一个两步 mini probe(`A → B`,`publishDir mode: 'copy'`)在 26.10.0 上实测:
+  - 删 `work/`、保留 `.nextflow/cache` 后 `-resume`:不报错、不静默跳过,而是**重新提交**两个任务(A 哈希不变;B 因输入路径变化换哈希)。所以"哈希缓存指向已删目录会退化成静默空操作"这个担心在本版本上不成立,清理工具可以纯按目录边界切分,不必为规避它去额外删 `.nextflow/cache`。
+  - 只删 `results/`、保留 `work/` 后 `-resume`:两个任务都报 `Cached process`,`results/` 被完整重建(与 F17 一致)。这把一个最高频需求——"我只想要一份新报告"——从 38 分钟降到数秒,因此写进工具的 `--help` 作为建议路径,而不是做成第四个层级(层级一多就没人记得住)。
+  - `du` 与 `df` 的差再次被量化:同日删旧 checkout 的 `.snakemake/conda`,`du` 报 **6.8 GB**、`df` 只回 **2.80 GiB**。故清理工具的唯一口径是 `df` 前后差,`du` 的数字必须标注为"上界",否则工具会长期系统性高报自己的功劳。
+  - **一次被当场纠正的界线错误**:初版把 `.nextflow/cache` 与 `data/cache/` 划在 `all` 档,理由是"引擎记账、无害"。用户复核后指出:"不只是 output,中间产物都要删"——`cache` 是引擎自己写出来的中间产物,`data/cache/` 是 AMR guard 写的中间产物,二者都该归 `outputs`,不该让用户为了删中间产物去动必须联网重建的环境。已上移。现在 `outputs` 与 `all` 的唯一差别是 **conda 环境**,理由收敛为一条可检验的事实:它是整棵树上唯一需要联网(~5.7 GiB 下载)才能回来的东西。
+  - 设计:三级(`check` 默认不删 / `outputs` 删全部产物与中间产物但保留 conda 环境 / `all` 连环境),删除表是**允许清单**,每条路径删除前再复核一次(相对路径、无 `..`、非软链接、父目录 realpath 在仓库内、不是申报输入),输入在清理前后各盘点一次并比对,不符即 exit 1 并打印差异。两个负对照写进 CI:非终端且无 `--yes` 必须拒绝;把 `data/raw` 注入**副本**的删除表后仍须被"申报输入"那条拒掉——即允许清单不是最后一道防线。
+
 **里程碑 1 验收记录（2026-10-14）：** 首次 `-stub` 运行（当时未加 stub: 块，按 F14 语义实为真实执行）10 任务 DAG 正确；渲染命令与 snakefile 逐 token 一致（fastqc `-o` 为 workdir 属预期差异）；坏样本表 4 例注入（缺列/坏名/重复名/fq 不存在）全部在任务启动前失败且报错信息逐条对齐；真实运行 10/10 成功，产物目录树、logs/、benchmarks/（Snakemake 格式 `s\th:m:s`）与源仓库一致，**8 个 Trimmomatic 产物与 Snakemake 版逐字节一致**。
 
 ## 13. 运行方式
@@ -1257,6 +1264,7 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D21 | 生长检查**同时断言得率**(gDW/g,窗口 0.30–0.70),不只断言 μ：μ 强依赖介质的吸收上限这一约定,得率不依赖(它是生物质化学计量);摩尔质量由介质文件声明(`carbon_source_mw`)而非代码硬编码。敏感度表写入介质文件与 `docs/interpretation.md` | 已定(2026-10-15,用户与导师反馈 #3,F31) |
 | D23 | 目录结构:**`data/` = 输入**(raw/db/reference/cache)、**`results/` = 产物**(qc/reads/assembly/annotation/models/report)、`logs/`+`benchmarks/` = 运行账本、`work/`+`.nextflow/` = 引擎;**不再镜像 Snakemake 输出树**(内容仍逐字节可比,只换路径)。MULTIQC 只发布报告本体与其数据目录;Nextflow 自身 report/trace 固定 `results/report/nextflow/` 且在 CI 关闭;AMR 缓存经 `WGS_AMR_GUARD_CACHE` 落在 `data/cache/` | 已定(2026-10-21,用户反馈,F33) |
 | D24 | **允许对复用资产做一处有意偏离**:`multiqc_config.yaml` 的 `software_versions` 段删掉假的 `Snakemake 9.25.2`、补上 BLAST+/COBRApy/GLPK;引擎版本改为运行时注入(`*_mqc_versions.yaml`)。理由:假版本号属于**错误陈述**而非风格;D4 的字节一致是为省同步成本,不能以保留错误为代价。资产 sha256 与背离原因已记入 `docs/asset-sources.md` | 已定(2026-10-21,用户要求,F37) |
+| D25 | **破坏性操作的默认层级必须是"什么都不删"**:`bin/pipeline-clean` 三档 `check`(默认,只印计划)/`outputs`(产物,保留 conda 环境)/`all`(连缓存);输入(`data/raw`、`data/db`、`data/reference`)与全部被跟踪文件在任何档位都不进删除表;真实删除需 `--yes` 或终端确认,非终端无 `--yes` 一律拒绝。理由:用户要的"一键"由 `outputs --yes`/`all --yes` 提供,不必靠降低默认档来换;而默认档一旦会删东西,就没有第二次机会(2026-10-22,用户要求,F41) | 已定(2026-10-22) |
 
 ## 17. 里程碑与后续开放问题
 

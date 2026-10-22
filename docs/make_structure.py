@@ -37,7 +37,7 @@ GROUPS = [
      "MultiQC config: the reused one plus the presentation overlay (section order, F21).",
      lambda p: p.startswith("multiqc_")),
     ("tests", "Tests and CI",
-     "Seven local checks and the four-job workflow; nothing here runs tools.",
+     "Eight local checks and the five-job workflow; nothing here runs tools.",
      lambda p: p.startswith("tests/") or p.startswith(".github/")),
     ("docs", "Documentation",
      "Entry points (README), the change log, the design record, and this tree.",
@@ -134,9 +134,9 @@ def build_md(files, assigned, commit):
     lines = [
         "# Project structure (the pipeline only)",
         "",
-        "Generated from `git ls-files` at `%s` by `docs/make_structure.py` -- **regenerate it, do"
+        "Generated from `git ls-files` at commit `%s` by `docs/make_structure.py` -- **regenerate it, do"
         " not hand-edit**. Because only tracked files are read, generated artefacts and fetched"
-        " databases cannot appear below: the \"pipeline only\" property is structural.",
+        " databases cannot appear below: the \"pipeline only\" property is structural." % commit,
         "",
         "%d tracked files, in the order you would read them:" % len(files),
         "",

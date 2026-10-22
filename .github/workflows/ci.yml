@@ -70,6 +70,18 @@ jobs:
       - name: Full 10-step DAG with stubs + output contract
         run: bash tests/ci/run-stub-smoke.sh
 
+  cleanup-tool:
+    name: cleanup tool blast radius
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Nextflow, no conda, no python: bin/pipeline-clean is bash + coreutils,
+      # and the check runs it against a fixture project of sentinel files. A
+      # cleanup tool is the one script here that can destroy the evidence, so its
+      # blast radius is asserted on both sides -- what goes, and what survives.
+      - name: Three levels, two refusals, one negative control
+        run: bash tests/ci/run-clean-check.sh
+
   failure-isolation:
     name: injected single-sample failure
     runs-on: ubuntu-latest

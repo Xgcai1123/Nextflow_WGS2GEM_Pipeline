@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bin/pipeline-clean` — one cleanup command with three explicit blast radii.** "Clean up" meant
+  three different things and the repository only offered `rm -rf`, so the expensive thing and the
+  big thing had to be paid for together: `results/` is 434 MiB and ~38 minutes of compute,
+  `.nextflow/` is 5.87 GiB of conda environments and a network round trip. The levels are now
+  named: **`check`** (the default — removes nothing, prints what every level would remove with
+  sizes), **`outputs`** (every product *and* every intermediate — `results/ work/ logs/
+  benchmarks/ .nextflow/history .nextflow/cache data/cache/` and the engine logs — keeping
+  `.nextflow/conda`, so the next run needs no download) and **`all`** (the above plus
+  `.nextflow/` and `.nxhome/`). The line is drawn at the only thing that a run cannot
+  regenerate from local material: the conda environments cost ~5.7 GiB of downloads. What no level can remove is enforced three ways
+  rather than promised: the delete tables are an **allowlist** (an input that appears in no table
+  cannot be removed, even by a typo); every candidate path is re-validated immediately before
+  removal (relative, no `..`, not a symlink, parent resolving inside the checkout, not a declared
+  input); and the inputs are inventoried before and after, so a changed byte under `data/raw`,
+  `data/db` or `data/reference` — or an edited tracked file — makes it exit 1 and name the
+  difference instead of reporting success. Reclaimed space is measured with `df` before/after,
+  never by summing `du`: measured the same day, the old checkout's `.snakemake/conda` reported
+  **6.8 GB** by `du` and freed **2.80 GiB**, because conda environments are hardlinked to each
+  other. Refusals: a running Nextflow launcher (`pgrep` on `nextflow.cli.Launcher`), a symlinked
+  `results/` (which would make `work/` the only copy), no `--yes` on a non-terminal stdin (exit 2 —
+  it refuses rather than guessing). Two resume behaviours were measured on 26.10.0 rather than
+  assumed, and both are documented in the script: deleting `work/` and keeping `.nextflow/cache`
+  makes `-resume` recompute (the stale cache is not silently reused), while deleting only
+  `results/` and keeping `work/` re-publishes every cached task in seconds (F17). Guarded by
+  `tests/ci/run-clean-check.sh` (0.4 s, no Nextflow, no conda, no Python): a fixture project of
+  sentinel files is cleaned for real and asserted on both sides — what is gone and what survived —
+  with two refusals proven to fire and a negative control that injects `data/raw` into a **copy**
+  of the delete table and checks the input refusal still wins. Design doc F41.
+
 - **`docs/justification.md` — the per-decision answer sheet for reviewers.** The existing docs are
   organised by report artifact and column ("what does N50 mean"), which is not the axis a reviewer
   asks along ("why Trimmomatic and not fastp"), so a complete field guide can still feel
@@ -161,6 +190,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/ci/README.md`.
 
 ### Fixed
+
+- **The disk pre-flight now points at `bin/pipeline-clean` instead of at two raw `rm -rf` lines.**
+  The F20 guard's advice was `rm -rf work` and `rm -rf .nextflow/conda`, printed exactly when the
+  volume is full and nobody is reading carefully — two paths that happen to be right today and that
+  no test checked. It now names `bin/pipeline-clean outputs --yes` (task cache, `results/`, logs)
+  and `bin/pipeline-clean all --yes` (plus the conda environments), and
+  `tests/ci/run-disk-guard.sh` asserts the hint names the tool rather than a raw deletion, so the
+  advice cannot drift away from the tool that owns it. The guard's own assertions are unchanged:
+  it still aborts before the first task, still names the shortfall, and still documents
+  `--min_free_disk_gb`.
 
 - **The pipeline figure is generated and machine-checked instead of hand-drawn.** Section 3 of
   `docs/pipeline-summary.html` is now an inline SVG produced by `docs/make_pipeline_diagram.py`,

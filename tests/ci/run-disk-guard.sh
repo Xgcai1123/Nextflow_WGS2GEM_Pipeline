@@ -38,6 +38,10 @@ expect_grep   "explains the shortfall"      "GiB free < 999999" "${log2}"
 expect_grep   "refuses to start"            "refusing to start" "${log2}"
 expect_grep   "names the work cache"        "Nextflow task cache" "${log2}"
 expect_grep   "names the conda cache"       "conda environments" "${log2}"
+# The hint must name the tool that owns these paths, not a raw `rm -rf`: the
+# advice a guard prints is the advice most likely to be followed while the disk
+# is full and nobody is reading carefully.
+expect_grep   "points at the cleanup tool"  "bin/pipeline-clean outputs --yes" "${log2}"
 expect_grep   "documents the override"      "--min_free_disk_gb" "${log2}"
 expect_nogrep "no task was submitted"       "Submitted process" "${log2}"
 expect_absent "no report was written"       "${CI_OUT}/results/report/multiqc_report.html"

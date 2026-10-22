@@ -8,6 +8,7 @@ drift apart.
 ```bash
 export PATH="/path/to/nextflow/bin:$PATH"     # Nextflow >= 25.10
 bash tests/ci/run-embed-check.sh              # needs python3 only, no Nextflow
+bash tests/ci/run-clean-check.sh              # needs neither python3 nor Nextflow
 bash tests/ci/run-lint.sh
 bash tests/ci/run-preview.sh
 bash tests/ci/run-disk-guard.sh
@@ -26,6 +27,7 @@ assertion. They are independent and can be run in any order.
 | Script | Proves |
 |---|---|
 | `run-embed-check.sh` | The two report-embedder scripts **actually run** — they never do under `-stub-run`, because MULTIQC's `stub:` block replaces the real script body. Asserts the section header each emits (`id` / `section_name` / `plot_type`; MultiQC silently ignores a malformed one), that QUAST yields **one aggregate** file for the cohort while MEMOTE yields **one file per sample** (D15), that every `<iframe srcdoc>` parses back **byte-identical** to its source page (fixtures deliberately full of `&`, `<`, `>`, `"`, `'`), that an embedded page's `<base href="/">`, `<style>` and `<script>` never reach the outer document, that a cohort member with no report is a warning rather than a crash — and that the file with no inputs is not written at all. Also pins the ordering contract: `quast_full` sorts between `quast` and `busco` in the overlay, with nothing else squeezed in. Needs no conda, no Nextflow and no network. |
+| `run-clean-check.sh` | [`bin/pipeline-clean`](../../bin/pipeline-clean) removes what the pipeline **produced** and nothing it was **given**, at each of its three levels. A miniature project of sentinel files is cleaned for real and checked on both sides: `check` (the default) deletes nothing; `outputs` removes every product and every intermediate (`results/ work/ logs/ benchmarks/ .nextflow/history .nextflow/cache data/cache/` and the engine logs) while `data/raw`, `data/db`, `data/reference`, the code and `.nextflow/conda` all survive; `all` also removes the caches. Two refusals are proven to fire — no `--yes` over a non-terminal stdin (exit 2), and a symlinked `results/` (exit 1, the symlink target untouched). The last case is a negative control: a **copy** of the script with `data/raw` injected into its delete table still refuses, so the input allowlist is not the only thing standing between a typo and the reads. Runs in under a second and needs no Nextflow, no conda and no Python. |
 | `run-lint.sh` | `nextflow lint main.nf nextflow.config` reports **no errors**, and the warning count does not exceed the pinned baseline (a ratchet, so lint debt cannot grow unnoticed). It also runs `docs/make_pipeline_diagram.py --check`, so the flow chart in `docs/pipeline-summary.html` cannot grow an edge that leaves a box on the wrong side, crosses another box, or a label wider than its box — the failure mode a hand-drawn figure has (design doc F39). Needs no Nextflow for that part. |
 | `run-preview.sh` | `-preview` compiles `main.nf` and runs the workflow body without executing a task; and seven malformed sample sheets (missing column, bad name, duplicate name, wrong field count, missing FASTQ, missing reference, missing file) each abort **before a single task is submitted**. The bad sheets are run with `-stub-run`, not `-preview`, precisely so a task *would* be submitted if validation failed to fire. |
 | `run-disk-guard.sh` | The F20 disk pre-flight passes at a low floor, **aborts before any task** with a message naming the shortfall and the cleanup commands when the floor is unmet, and is fully skipped with `--min_free_disk_gb=0`. |
@@ -48,8 +50,9 @@ assertion. They are independent and can be run in any order.
 
 - **No conda environment is built** and no tool is executed: all Nextflow checks use `-stub-run`
   (every process has a `stub:` block). Measured on the development machine: `run-embed-check.sh`
-  0.3 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s, `run-growth-check.sh` 12 s,
-  `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s, `run-preview.sh` 33 s.
+  0.3 s, `run-clean-check.sh` 0.4 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s,
+  `run-growth-check.sh` 12 s, `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s,
+  `run-preview.sh` 33 s.
 - `run-growth-check.sh` is the **one check that is not tool-free**: it needs `cobra` to solve
   flux balance problems and `PyYAML` to read the medium definition, so its CI job runs
   `pip install cobra pyyaml` (cobra brings the GLPK solver `swiglpk`; it does **not** bring

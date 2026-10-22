@@ -83,19 +83,51 @@ It is validated **before any task starts**: missing columns, invalid sample name
 names, wrong field counts and missing FASTQ files all abort the run immediately with a
 row-specific message.
 
+### Cleaning up — three levels, one command
+
+`bin/pipeline-clean` removes what the pipeline **produced** and never what it was **given**. The
+default level deletes nothing, so it is safe to run at any time:
+
+```bash
+bin/pipeline-clean                 # check: print what each level would remove, with sizes
+bin/pipeline-clean outputs --yes   # everything a run produced; keeps the conda environments
+bin/pipeline-clean all --yes       # the above plus the toolchain caches (8 conda envs)
+```
+
+`outputs` removes **every product and every intermediate** — the task directories, the engine's
+run index and its task-hash cache, and the tool cache under `data/cache/` — and stops at the one
+thing that needs a network round trip: the conda environments. `all` removes those too.
+
+| Level | Removes | Next run costs |
+|---|---|---|
+| `check` (default) | nothing — prints the plan | nothing |
+| `outputs` | `results/` `work/` `logs/` `benchmarks/` `.nextflow/history` `.nextflow/cache` `data/cache/` `.nextflow.log*` | ~38 min of compute; **no** download, the envs are reused |
+| `all` | the above + `.nextflow/` + `data/cache/` + `.nxhome/` | ~38 min + 8 conda environments rebuilt from `envs/*.yaml` (~5.7 GiB) |
+
+`data/raw` (the reads), `data/db` (4 GB of reference databases), `data/reference` and every tracked
+file are refused at all three levels: they appear in no delete table, and each candidate path is
+re-validated (not a symlink, resolves inside the checkout, not a declared input) immediately before
+it is removed. The inputs are then inventoried again, and the script exits non-zero if a byte of
+them changed. Reclaimed space is measured with `df` before/after, never by summing `du`, because
+conda environments are hardlinked to each other and `du` over-counts what you actually get back.
+
+To regenerate only the deliverables, don't clean at all: `rm -rf results && nextflow run . -resume`
+re-publishes every cached task in seconds without recomputing it (measured on 26.10.0, F17).
+
 ### Verify without running the pipeline
 
 The repository ships a check suite — no conda environment is built and no tool is executed (the
-eleven processes run from their `stub:` blocks, and the embedding check calls the two helper
+twelve processes run from their `stub:` blocks, and the embedding check calls the two helper
 scripts directly). Only the last line needs a python with `cobra` and `PyYAML`; the rest need
 nothing but Nextflow:
 
 ```bash
 bash tests/ci/run-embed-check.sh           # MEMOTE / QUAST section scripts (no Nextflow needed)
+bash tests/ci/run-clean-check.sh           # cleanup tool: three levels + refusals (nothing needed)
 bash tests/ci/run-lint.sh                  # nextflow lint (errors + warning ratchet)
 bash tests/ci/run-preview.sh               # compile + sample-sheet validation, good and bad
 bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
-bash tests/ci/run-stub-smoke.sh            # full DAG (24 tasks) + published output contract
+bash tests/ci/run-stub-smoke.sh            # full DAG (25 tasks) + published output contract
 bash tests/ci/run-failure-isolation.sh     # injected single-sample failure + -resume
 PYTHON=.../bin/python3 bash tests/ci/run-growth-check.sh   # defined-medium growth (needs cobra)
 ```
@@ -371,10 +403,12 @@ media/                      versioned growth-medium definition (M9, aerobic, glu
 scripts/                    helper scripts (byte-identical) + memote_html_section.py,
                             quast_html_section.py, check_growth.py, compare_assembly_ref.py
 bin/task_env.sh             in-task wall-time helper feeding benchmarks/
+bin/pipeline-clean          three-level cleanup: check (default) / outputs / all
 docs/                       design document (F/D records), interpretation guide,
                             asset provenance, generated project tree
 tests/ci/                   tool-free check suite (lint, validation, DAG, disk guard,
-                            failure isolation, report-embedding scripts, growth check)
+                            failure isolation, report-embedding scripts, growth check,
+                            cleanup blast radius)
 .github/workflows/ci.yml    runs tests/ci/ on every push and pull request
 m0probe/                    minimal Nextflow probe used to validate runtime behaviour
                             (not part of the workflow, not run by CI)

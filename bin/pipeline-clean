@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+# ============================================================
+# bin/pipeline-clean -- remove what the pipeline *produced*; never what it was *given*.
+#
+#   bin/pipeline-clean [LEVEL] [--yes]
+#
+#     check    (default) delete nothing; print what every level would remove
+#     outputs  every product AND every intermediate: results/ work/ logs/
+#              benchmarks/ .nextflow/{history,cache} data/cache/ + engine logs.
+#              Keeps the conda environments.
+#     all      `outputs` + .nextflow/ (the 8 conda envs) + .nxhome/. This is the
+#              "back to a fresh clone" level.
+#
+# Why three levels instead of one "clean": almost everything here is local, but
+# the conda environments are not -- rebuilding them needs ~5.7 GiB of downloads.
+# So `outputs` removes every product, every intermediate and every engine cache,
+# and stops exactly at the one thing that costs a network round trip. A single
+# `rm -rf` would make that decision for you, wrongly, in both directions.
+#
+# Safety model -- four properties, each of which you can verify by reading this file:
+#   1. allowlist, never denylist. Only the paths listed in the tables below can be
+#      removed. An input that appears in no table cannot be removed even by a typo.
+#   2. every target is re-validated immediately before it is removed: relative,
+#      no '..', not a symlink, and its parent must resolve inside the project root.
+#   3. the inputs are inventoried before and compared after. If a byte under
+#      data/raw, data/db or data/reference changes (or a tracked file is touched),
+#      this exits 1 and names it instead of reporting success.
+#   4. reclaimed space is measured with `df` before/after, never by summing `du`:
+#      conda environments are hardlinked to each other and to the package cache,
+#      so `du` over-counts (measured 2026-10-22: `du` 6.8 GB -> 2.80 GiB really
+#      freed), and a cleanup tool that over-reports is a cleanup tool you stop
+#      trusting.
+#
+# Refusals (exit 1, nothing removed):
+#   - not inside a checkout of this pipeline (main.nf + nextflow.config missing)
+#   - a target is a symlink, an absolute path, or resolves outside the project root
+#   - a Nextflow launcher is running on this machine
+#   - results/ contains symlinks (publishDir is mode 'copy'; that must stay true,
+#     otherwise work/ would no longer be safe to remove)
+# Deleting also needs --yes, or a 'y' at an interactive prompt. Without a terminal
+# and without --yes it refuses (exit 2) rather than guessing.
+#
+# Exit codes: 0 done / nothing to do, 1 refusal, 2 usage or confirmation error.
+#
+# Local usage:  bin/pipeline-clean            # show the map (safe, default)
+#               bin/pipeline-clean outputs --yes
+#               bin/pipeline-clean all --yes
+# ============================================================
+
+set -uo pipefail
+shopt -s nullglob
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+
+# --- what each level removes ------------------------------------------------
+# Paths are relative to the project root and are the *only* things this script
+# can ever delete. `outputs` is a prefix of `all` by construction.
+
+# level `outputs` -- everything a run writes
+OUTPUTS_DIRS=(
+    "results"             # deliverable tree (publishDir copies land here)
+    "work"                # Nextflow task directories (~2.4 GiB after a 2-sample run)
+    "logs"                # per-step tool logs
+    "benchmarks"          # per-step runtimes (Snakemake-format TSVs)
+    ".nextflow/history"   # the run index: an index *into* work/, so it goes with it
+    ".nextflow/cache"     # task-hash database: engine bookkeeping, rebuilt by the next run
+    "data/cache"          # AMR-guard cache written by the pipeline
+)
+OUTPUTS_GLOBS=(
+    ".nextflow.log*"      # engine logs, current + 9 rotated
+    "report-*.html"       # engine run report from manual runs
+    "trace-*.txt"         # engine trace from manual runs
+    "dag-*.html"          # engine DAG render from manual runs
+)
+
+# level `all` -- additionally, what only a *network round trip* can rebuild.
+# The conda environments are the one thing a run cannot regenerate from local
+# material: rebuilding them re-downloads ~5.7 GiB. That, and only that, is why
+# they are a separate level rather than part of `outputs`.
+CACHE_DIRS=(
+    ".nextflow"           # conda envs (5.7 GiB) + plugins
+    ".nxhome"             # sandbox NXF_HOME used by tests/ci
+)
+
+# --- what no level may touch ------------------------------------------------
+# Belt and braces: these are checked against every candidate path, so even a bad
+# edit to the tables above fails closed instead of deleting the reads.
+KEEP_INPUTS=(
+    "data/raw"            # the reads -- the only genuinely irreplaceable input
+    "data/db"             # Bakta / BUSCO reference databases (4.0 GiB)
+    "data/reference"      # reference genome for the assembly comparison
+)
+
+# --- output helpers ---------------------------------------------------------
+say()  { printf '%s\n' "$*"; }
+info() { printf '[clean] %s\n' "$*"; }
+warn() { printf '[clean] warning: %s\n' "$*" >&2; }
+die()  { printf '[clean] refused: %s\n' "$*" >&2; exit 1; }
+
+human() {  # KiB -> human
+    awk -v k="${1:-0}" 'BEGIN {
+        if (k >= 1048576)      printf "%.2f GiB", k / 1048576
+        else if (k >= 1024)    printf "%.1f MiB", k / 1024
+        else                   printf "%d KiB", k
+    }'
+}
+
+du_kb() { [ -e "$1" ] && du -sk "$1" 2>/dev/null | awk '{print $1}' || echo 0; }
+
+count_files() { [ -d "$1" ] && find "$1" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0; }
+
+size_label() {  # <path> -> "434.0 MiB, 83 files"  (or "absent")
+    local p="$1"
+    if [ ! -e "${p}" ]; then echo "absent"; return; fi
+    if [ -d "${p}" ]; then
+        echo "$(human "$(du_kb "${p}")"), $(count_files "${p}") files"
+    else
+        echo "$(human "$(du_kb "${p}")")"
+    fi
+}
+
+df_free_kb() {
+    df -k "$ROOT" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+df_total_kb() {
+    df -k "$ROOT" 2>/dev/null | awk 'NR==2 {print $2}'
+}
+
+usage() {
+    cat <<'USAGE'
+bin/pipeline-clean -- remove what the pipeline produced, never what it was given
+
+usage: bin/pipeline-clean [LEVEL] [--yes]
+
+  check      (default)  delete nothing. Print what each level would remove,
+                        with sizes, and what is never touched at any level.
+  outputs               remove every product (results/) and every intermediate
+                        (work/ logs/ benchmarks/ .nextflow/history .nextflow/cache
+                        data/cache/ engine logs). Keeps .nextflow/conda, the 8
+                        conda environments -- the only thing here that needs a
+                        network round trip to come back.
+  all                   everything `outputs` removes, plus .nextflow/ (the conda
+                        environments) and .nxhome/. Back to a fresh clone; the
+                        next run rebuilds the environments from envs/*.yaml.
+
+  --yes, -y             do not ask for confirmation
+  -h, --help            this text
+
+Never removed, at any level: data/raw (the reads), data/db (reference
+databases), data/reference, and every tracked file (main.nf, nextflow.config,
+envs/, scripts/, bin/, docs/, tests/, samples*.tsv, multiqc_*.yaml).
+
+Prefer not to lose the compute? Regenerating only the deliverables does not
+require this script:  rm -rf results && nextflow run . -resume
+Measured on 26.10.0: cached tasks are re-published without recomputation (F17),
+so that costs seconds, not 38 minutes.
+USAGE
+}
+
+# --- argument parsing -------------------------------------------------------
+LEVEL=check
+ASSUME_YES=0
+
+for arg in "$@"; do
+    case "$arg" in
+        check|plan|dry-run|--dry-run|-n) LEVEL=check ;;
+        outputs|products)                LEVEL=outputs ;;
+        all|everything|full)             LEVEL=all ;;
+        --level=*)
+            case "${arg#--level=}" in
+                check)   LEVEL=check ;;
+                outputs) LEVEL=outputs ;;
+                all)     LEVEL=all ;;
+                *)       printf '[clean] unknown level: %s (use check, outputs or all)\n' "${arg#--level=}" >&2; exit 2 ;;
+            esac ;;
+        --yes|-y)  ASSUME_YES=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) printf '[clean] unknown argument: %s\n\n' "$arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+# --- refusals ---------------------------------------------------------------
+[ -f "${ROOT}/main.nf" ] || die "${ROOT} does not look like the pipeline checkout (no main.nf)"
+[ -f "${ROOT}/nextflow.config" ] || die "${ROOT} does not look like the pipeline checkout (no nextflow.config)"
+
+engines=""
+if command -v pgrep >/dev/null 2>&1; then
+    if pgrep -f 'nextflow\.cli\.Launcher' >/dev/null 2>&1 || pgrep -f 'nextflow\.jar' >/dev/null 2>&1; then
+        engines="$(pgrep -fl 'nextflow\.cli\.Launcher|nextflow\.jar' 2>/dev/null | head -3)"
+        die "a Nextflow run is active -- it would recreate what this deletes, or worse, delete what it publishes.
+  ${engines}
+  Wait for the run to finish, or stop it, then retry."
+    fi
+else
+    warn "pgrep not found: could not check whether a Nextflow run is active -- make sure none is."
+fi
+
+if [ -d "${ROOT}/results" ]; then
+    links="$(find "${ROOT}/results" -type l 2>/dev/null | head -3)"
+    if [ -n "${links}" ]; then
+        die "results/ contains symlinks, so work/ may be the only copy of a deliverable.
+  ${links}
+  publishDir is mode 'copy'; find out what wrote a symlink there before deleting work/."
+    fi
+fi
+
+# --- target computation -----------------------------------------------------
+# Emits one path per line for the requested level: directories, then glob hits.
+targets_for() {
+    local lvl="$1" p g
+    case "$lvl" in
+        check)   return 0 ;;
+        outputs) for p in "${OUTPUTS_DIRS[@]}"; do echo "${ROOT}/${p}"; done ;;
+        all)
+            # .nextflow/history sits inside .nextflow: listing both would print it
+            # twice and count its 104 KiB twice. Report the enclosing directory only.
+            for p in "${OUTPUTS_DIRS[@]}"; do
+                case "${p}" in
+                    .nextflow/*) : ;;
+                    *) echo "${ROOT}/${p}" ;;
+                esac
+            done
+            for p in "${CACHE_DIRS[@]}"; do echo "${ROOT}/${p}"; done ;;
+    esac
+    if [ "$lvl" != "check" ]; then
+        for g in "${OUTPUTS_GLOBS[@]}"; do
+            for p in "${ROOT}"/${g}; do [ -e "${p}" ] && echo "${p}"; done
+        done
+    fi
+}
+
+# Validates one candidate path; dies on anything suspicious.
+validate_target() {
+    local p="$1" parent resolved rel
+    rel="${p#${ROOT}/}"
+    [ "${rel}" != "${p}" ] || die "target is not inside the project root: ${p}"
+    case "${rel}" in
+        *..*) die "target contains '..': ${rel}" ;;
+        /*)   die "target is absolute: ${rel}" ;;
+    esac
+    local k
+    for k in "${KEEP_INPUTS[@]}"; do
+        case "${rel}" in
+            "${k}"|"${k}"/*) die "target is a declared input, which no level may remove: ${rel}" ;;
+        esac
+    done
+    if [ -L "${p}" ]; then
+        die "target is a symlink: ${rel} -> $(readlink "${p}")"
+    fi
+    parent="$(dirname "${p}")"
+    if [ -d "${parent}" ]; then
+        resolved="$(cd "${parent}" && pwd -P)"
+        case "${resolved}/" in
+            "${ROOT}/"*) : ;;
+            *) die "target resolves outside the project root: ${rel} (parent -> ${resolved})" ;;
+        esac
+    fi
+}
+
+# --- input inventory (before/after proof) -----------------------------------
+inventory() {
+    local out="$1" p
+    : > "${out}"
+    for p in "${KEEP_INPUTS[@]}"; do
+        if [ -e "${ROOT}/${p}" ]; then
+            printf '%s files=%s KiB=%s\n' "${p}" "$(count_files "${ROOT}/${p}")" "$(du_kb "${ROOT}/${p}")" >> "${out}"
+        else
+            printf '%s absent\n' "${p}" >> "${out}"
+        fi
+    done
+    if command -v git >/dev/null 2>&1 && [ -d "${ROOT}/.git" ]; then
+        # Tracked files: their count, plus how many are modified. A deletion or
+        # an edit of any tracked file changes one of these two lines.
+        printf 'tracked modified=%s\n' \
+            "$(git -C "${ROOT}" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')" >> "${out}"
+        printf 'tracked-count=%s\n' \
+            "$(git -C "${ROOT}" ls-files 2>/dev/null | wc -l | tr -d ' ')" >> "${out}"
+    fi
+}
+
+# --- reporting --------------------------------------------------------------
+print_map() {
+    local lvl
+    say ""
+    info "project : ${ROOT}"
+    info "volume  : $(human "$(df_free_kb)") free of $(human "$(df_total_kb)") (df, 1 KiB blocks)"
+    say ""
+    say "LEVELS -- a level is a promise about what survives:"
+    say ""
+    local out_kb=0 all_kb=0 p
+    for p in "${OUTPUTS_DIRS[@]}"; do out_kb=$((out_kb + $(du_kb "${ROOT}/${p}"))); done
+    for p in "${ROOT}"/.nextflow.log*; do out_kb=$((out_kb + $(du_kb "${p}"))); done
+    # `all` lists .nextflow as one directory, so count it once, not per subpath
+    for p in results work logs benchmarks .nextflow data/cache .nxhome; do
+        all_kb=$((all_kb + $(du_kb "${ROOT}/${p}")))
+    done
+    for p in "${ROOT}"/.nextflow.log*; do all_kb=$((all_kb + $(du_kb "${p}"))); done
+    say "  check      removes nothing"
+    say ""
+    say "  outputs    removes every product and every intermediate:"
+    say "             results/ work/ logs/ benchmarks/ .nextflow/history .nextflow/cache"
+    say "             data/cache/ .nextflow.log* report-*.html trace-*.txt dag-*.html"
+    say "             keeps   .nextflow/conda -- the 8 conda environments are NOT rebuilt"
+    say "             reclaims ~$(human "${out_kb}")  (du upper bound; df decides)"
+    say ""
+    say "  all        the above, plus .nextflow/ (conda envs) and .nxhome/"
+    say "             next run rebuilds the 8 environments from envs/*.yaml"
+    say "             reclaims ~$(human "${all_kb}")  (du upper bound; df decides)"
+    say ""
+    say "PATHS PER LEVEL (what the tables in this script allow):"
+    say ""
+    for lvl in outputs all; do
+        say "  ${lvl}:"
+        local t
+        while IFS= read -r t; do
+            [ -n "${t}" ] || continue
+            printf '    %-28s %s\n' "${t#${ROOT}/}" "$(size_label "${t}")"
+        done < <(targets_for "${lvl}")
+        say ""
+    done
+    say "NEVER TOUCHED AT ANY LEVEL:"
+    for p in "${KEEP_INPUTS[@]}"; do
+        printf '    %-28s %s\n' "${p}" "$(size_label "${ROOT}/${p}")"
+    done
+    printf '    %-28s %s\n' "tracked files" "main.nf, nextflow.config, envs/, scripts/, bin/, docs/, tests/, README, CHANGELOG"
+    say ""
+    say "Nothing was deleted. To act:  bin/pipeline-clean outputs --yes   (or: all --yes)"
+    say ""
+}
+
+print_selected() {
+    local lvl="$1" t
+    say ""
+    info "level: ${lvl}"
+    while IFS= read -r t; do
+        [ -n "${t}" ] || continue
+        printf '  %-28s %s\n' "${t#${ROOT}/}" "$(size_label "${t}")"
+    done < <(targets_for "${lvl}")
+    say ""
+}
+
+# --- main -------------------------------------------------------------------
+if [ "${LEVEL}" = "check" ]; then
+    print_map
+    exit 0
+fi
+
+# Everything below deletes. Validate the whole plan before the first rm, so a
+# refusal leaves the tree untouched rather than half-cleaned.
+PLAN=()
+while IFS= read -r t; do
+    [ -n "${t}" ] || continue
+    [ -e "${t}" ] || continue          # absent paths are not errors, just nothing to do
+    validate_target "${t}"
+    PLAN+=("${t}")
+done < <(targets_for "${LEVEL}")
+
+if [ "${#PLAN[@]}" -eq 0 ]; then
+    info "nothing to remove for level '${LEVEL}' -- the tree is already clean"
+    exit 0
+fi
+
+print_selected "${LEVEL}"
+
+if [ "${ASSUME_YES}" -ne 1 ]; then
+    if [ -t 0 ]; then
+        printf '[clean] remove the %d path(s) above from %s? [y/N] ' "${#PLAN[@]}" "${ROOT}"
+        read -r reply
+        case "${reply}" in
+            y|Y|yes|YES) : ;;
+            *) info "aborted -- nothing was removed"; exit 2 ;;
+        esac
+    else
+        printf '[clean] refused: no --yes and stdin is not a terminal.\n' >&2
+        printf '[clean] re-run with: bin/pipeline-clean %s --yes\n' "${LEVEL}" >&2
+        exit 2
+    fi
+fi
+
+BEFORE_KB="$(df_free_kb)"
+INV_BEFORE="$(mktemp)"
+trap 'rm -f "${INV_BEFORE}" "${INV_AFTER:-}"' EXIT
+inventory "${INV_BEFORE}"
+
+say ""
+removed=0
+for t in "${PLAN[@]}"; do
+    [ -e "${t}" ] || continue
+    validate_target "${t}"            # re-check immediately before removal
+    printf '  removing %-28s %s\n' "${t#${ROOT}/}" "$(size_label "${t}")"
+    # Finder keeps writing .DS_Store into directories as they empty, which makes
+    # `rm -rf` exit "Directory not empty". A second pass clears the residue.
+    rm -rf "${t}" 2>/dev/null || true
+    if [ -e "${t}" ]; then
+        find "${t}" -name .DS_Store -delete 2>/dev/null || true
+        rm -rf "${t}" 2>/dev/null || true
+    fi
+    [ -e "${t}" ] && warn "could not fully remove ${t#${ROOT}/}"
+    removed=$((removed + 1))
+done
+
+AFTER_KB="$(df_free_kb)"
+INV_AFTER="$(mktemp)"
+inventory "${INV_AFTER}"
+
+# --- post-conditions --------------------------------------------------------
+say ""
+status=0
+if ! diff -q "${INV_BEFORE}" "${INV_AFTER}" >/dev/null 2>&1; then
+    printf '[clean] FAILED: the inputs changed during cleanup\n' >&2
+    diff "${INV_BEFORE}" "${INV_AFTER}" | sed 's/^/  /' >&2
+    status=1
+else
+    info "inputs verified unchanged: ${KEEP_INPUTS[*]} (+ tracked files)"
+fi
+
+if [ -n "${BEFORE_KB}" ] && [ -n "${AFTER_KB}" ]; then
+    freed_gb="$(awk -v b="${BEFORE_KB}" -v a="${AFTER_KB}" 'BEGIN {printf "%.2f", (a - b) / 1048576}')"
+    info "reclaimed ${freed_gb} GiB (df before/after; ${removed} path(s) removed)"
+    info "now $(human "$(df_free_kb)") free of $(human "$(df_total_kb)")"
+fi
+
+case "${LEVEL}" in
+    outputs) info "next run: nextflow run . -resume -- work/ is gone, so every task recomputes; the conda envs are reused (no download)" ;;
+    all)     info "next run: nextflow run . -- 8 conda environments will be rebuilt from envs/*.yaml (~5.7 GiB, needs network)" ;;
+esac
+
+exit "${status}"
