@@ -1388,20 +1388,39 @@ class RunManager(object):
             })
 
         # -- BUSCO lineage ------------------------------------------------
+        # The pipeline passes `--download_path <busco_db>`, and BUSCO 5 stores a
+        # downloaded lineage under `<download_path>/lineages/<lineage>` (that is
+        # where this checkout has it: data/db/busco/lineages/enterobacterales_odb10).
+        # A preflight that only checks `<busco_db>/<lineage>` stays permanently
+        # yellow on a correctly provisioned machine -- and a warning that is always
+        # on is a warning nobody reads. Accept both layouts, but require the marker
+        # files so an empty directory is not mistaken for a lineage.
         busco_db = self.params.get("busco_db") or os.path.join(
             self.project, "data", "db", "busco")
         lineage = str(self.params.get("busco_lineage") or
                       "enterobacterales_odb10")
-        lineage_dir = os.path.join(str(busco_db), lineage)
-        if os.path.isdir(lineage_dir):
+        lineage_candidates = [
+            os.path.join(str(busco_db), "lineages", lineage),
+            os.path.join(str(busco_db), lineage),
+        ]
+        lineage_dir = None
+        for candidate in lineage_candidates:
+            if not os.path.isdir(candidate):
+                continue
+            if any(os.path.exists(os.path.join(candidate, marker))
+                   for marker in ("hmms", "info", "dataset.cfg")):
+                lineage_dir = candidate
+                break
+        if lineage_dir:
             checks.append({
                 "id": "busco_db", "label": "BUSCO lineage", "status": "ok",
-                "detail": lineage, "hint": "",
+                "detail": "%s (%s)" % (lineage, lineage_dir), "hint": "",
             })
         else:
             checks.append({
                 "id": "busco_db", "label": "BUSCO lineage", "status": "warn",
-                "detail": "%s 未下载 (%s)" % (lineage, lineage_dir),
+                "detail": "%s 未下载 (%s)" % (
+                    lineage, " 或 ".join(lineage_candidates)),
                 "hint": "首次运行会下载 lineage(需网络)",
             })
 
