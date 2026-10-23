@@ -1,8 +1,8 @@
 # Project structure (the pipeline only)
 
-Generated from `git ls-files` at commit `e3eb0fa` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
+Generated from `git ls-files` at commit `d634e59` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
 
-81 tracked files, in the order you would read them:
+82 tracked files, in the order you would read them:
 
 ## The pipeline you run (4 files)
 
@@ -146,7 +146,7 @@ WGSpipeline-nextflow/
         └── run-ui-check.sh
 ```
 
-## Documentation (14 files)
+## Documentation (15 files)
 
 Entry points (README), the change log, the design record, and this tree.
 
@@ -163,6 +163,7 @@ WGSpipeline-nextflow/
 │   ├── project-structure.md
 │   ├── project-structure.png
 │   ├── roadmap.md
+│   ├── ui-acceptance.png
 │   └── ui.md
 ├── CHANGELOG.md
 ├── LICENSE
