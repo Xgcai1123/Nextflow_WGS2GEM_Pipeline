@@ -90,7 +90,7 @@ F41 / D25、磁盘预检提示语改为指向本工具(并加了一条断言钉�
 
 **交付物**:`ui/server.py` `ui/runner.py` `ui/sheet.py`(python3 标准库,零第三方依赖)、
 `ui/index.html` `ui/app.js` `ui/style.css`(原生 JS,无构建、无外链)、`bin/pipeline-ui`(启动器)、
-`tests/ci/run-ui-check.sh`(265 条断言,37 s,CI job `local-ui`)、`docs/ui.md`(契约 + UI-D1..D12 +
+`tests/ci/run-ui-check.sh`(282 条断言,42 s,CI job `local-ui`)、`docs/ui.md`(契约 + UI-D1..D12 +
 实测记录)、README「Local web UI」小节、CHANGELOG 0.2.0、设计文档 D26 / F45–F48。
 
 ### 实际形态(与草案逐条对照)

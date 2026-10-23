@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-24
+
+### Fixed
+
+- **Starting a run right after opening the page could be refused with a false "external nextflow process"
+  409 (F50).** The page auto-runs the preflight on load, and the preflight calls `nextflow -version`; the
+  busy detector excluded this server's own pid, its recorded run pid and its `Popen` handle, but **not its
+  own child processes**, so that short-lived JVM — whose command line naturally mentions "nextflow" — was
+  reported as a foreign engine. Clicking Start within that window failed with
+  `检测到外部 nextflow 进程 (pid …)` and then worked seconds later. The heuristic was also too loose in a
+  second way: the checkout is called `…/WGSpipeline-nextflow`, so any command line that mentioned the
+  directory and the word `run` matched. The classifier now only counts (a) an executable whose basename is
+  exactly `nextflow` / `fake-nextflow` (including behind `sh -c`), (b) a JVM carrying
+  `nextflow.cli.Launcher` / `nextflow.jar` / `-jar …/nextflow-<version>-<build>.jar`, **and both shapes must
+  carry the `run` argument** — so `-version` and `config -flat` can never match. In addition, the busy scan
+  now excludes every descendant of this server (parent/child column from `ps`) plus children registered by
+  `_run_cmd` while alive (the `ps`-less fallback), the `409` message names the offending pid and command,
+  and the test gate imports `ui/runner.py` instead of keeping a drifting copy of the heuristic. Tests:
+  17 new assertions over a true/false classifier table and a synthetic process table; suite 282 ok /
+  0 FAIL / 0 SKIP (42 s). Existing 409 semantics are unchanged: a real foreign engine still blocks a
+  second run.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added
