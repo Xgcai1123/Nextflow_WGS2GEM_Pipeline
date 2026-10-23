@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""A programmable stand-in for `nextflow`, for `tests/ci/run-ui-check.sh`.
+
+Why a fake engine at all: the UI's job is to *drive and report* a run, not to run
+bioinformatics. The behaviours worth testing -- progress parsing, the failure
+panel, cancel, report discovery, SSE replay -- need a run that is slow, or fails,
+or exits 0 without writing a report. None of those are cheap or safe to produce
+with the real pipeline, and two of them (fail on demand, hang on demand) cannot be
+produced at all. So the engine is faked at the process boundary, which is exactly
+where the UI sees it.
+
+Usage (the UI calls it exactly like the real thing):
+
+    FAKE_NEXTFLOW_CTRL=/tmp/ctrl.json <this-file> run . --samples_tsv sheet.tsv ...
+
+Control file (rewritten between scenarios, UI does not need restarting):
+
+    {"mode": "success",        # success | fail | slow | noreport
+     "delay": 0.02,            # seconds between log lines
+     "fail_process": "SPADES", # for mode=fail
+     "fail_sample": "<name>",  # for mode=fail; default: last sample
+     "report": "/abs/multiqc_report.html",  # default: <cwd>/results/report/multiqc_report.html
+     "report_html": "…",       # default: a small fake MultiQC page
+     "results_files": {"results/assembly/FAKE_A/contigs.fasta": ">c\nACGT\n"},
+                               # extra files written under <cwd>/results (mode=success only).
+                               # null/omitted = the built-in mini tree. This is what makes
+                               # `GET /api/download?what=results` checkable: the test knows
+                               # the exact expected tree because it wrote the control file.
+     "config": "ok",           # ok | fail -- `config -flat` behaviour
+     "version": "26.10.0",     # `-version` behaviour
+     "stderr": ""}             # extra stderr noise, for log-streaming tests
+
+Exit codes: 0 success, 1 fail, 143 killed by SIGTERM (slow mode). No ANSI
+colours: the UI parses lines, and so do the tests.
+"""
+import json
+import os
+import pathlib
+import signal
+import sys
+import time
+
+DEFAULT_CTRL = {
+    "mode": "success",
+    "delay": 0.02,
+    "fail_process": "SPADES",
+    "fail_sample": None,
+    "report": None,
+    "report_html": (
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        "<title>FAKE MULTIQC REPORT</title></head><body>"
+        "<h1>FAKE MULTIQC REPORT</h1><p>sentinel:FAKE_REPORT_BODY</p>"
+        "</body></html>"
+    ),
+    "config": "ok",
+    "version": "26.10.0",
+    "stderr": "",
+    # A mini results tree: enough files to prove the results tar is the real tree
+    # (not a fixed constant) and that a download is not a directory listing.
+    # A test that overwrites `results_files` in the control file knows exactly
+    # what the tarball must contain, since it supplied the tree.
+    "results_files": {
+        "results/assembly/FAKE_A/contigs.fasta": ">contig_1\nACGTACGTACGT\n",
+        "results/assembly/FAKE_B/contigs.fasta": ">contig_1\nTTTTGGGGCCCC\n",
+        "results/qc/quast/FAKE_A/report.txt": "QUAST fake report for FAKE_A\n",
+        "results/qc/quast/FAKE_A/report.html": "<!DOCTYPE html><html><body>QUAST FAKE</body></html>\n",
+    },
+}
+
+
+def ctrl_path():
+    return os.environ.get("FAKE_NEXTFLOW_CTRL") or str(pathlib.Path.cwd() / ".fake-nextflow.json")
+
+
+def load_ctrl():
+    ctrl = dict(DEFAULT_CTRL)
+    try:
+        with open(ctrl_path(), "r", encoding="utf-8") as fh:
+            ctrl.update(json.load(fh) or {})
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # a broken control file must be loud, not silent
+        sys.stderr.write("fake-nextflow: cannot read control file %s: %s\n" % (ctrl_path(), exc))
+        sys.exit(97)
+    return ctrl
+
+
+def emit(line):
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def parse_argv(argv):
+    """Return (subcommand, opts) without pretending to be a full CLI."""
+    opts = {"sheet": None, "report_tag": "", "resume": False, "profile": "standard", "flat": False}
+    if not argv:
+        return None, opts
+    if argv[0] in ("-version", "--version", "version"):
+        return "version", opts
+    sub = argv[0]
+    rest = argv[1:]
+    i = 0
+    while i < len(rest):
+        arg = rest[i]
+        nxt = rest[i + 1] if i + 1 < len(rest) else None
+        if arg == "--samples_tsv" and nxt is not None:
+            opts["sheet"] = nxt
+            i += 2
+            continue
+        if arg.startswith("--samples_tsv="):
+            opts["sheet"] = arg.split("=", 1)[1]
+            i += 1
+            continue
+        if arg == "--report_tag" and nxt is not None:
+            opts["report_tag"] = nxt
+            i += 2
+            continue
+        if arg.startswith("--report_tag="):
+            opts["report_tag"] = arg.split("=", 1)[1]
+            i += 1
+            continue
+        if arg == "-resume":
+            opts["resume"] = True
+        elif arg == "-profile" and nxt is not None:
+            opts["profile"] = nxt
+            i += 2
+            continue
+        elif arg == "-flat":
+            opts["flat"] = True
+        i += 1
+    if sub == "config":
+        return "config", opts
+    return sub, opts
+
+
+def read_sheet(path):
+    """Samples and reference flags from the same sheet the UI wrote."""
+    samples = []
+    if not path or not os.path.exists(path):
+        return [("FAKE_A", False), ("FAKE_B", False)]
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+    if not lines:
+        return [("FAKE_A", False)]
+    header = lines[0].split("\t")
+    try:
+        si = header.index("sample")
+        ri = header.index("reference")
+    except ValueError:
+        si, ri = 0, -1
+    for ln in lines[1:]:
+        cols = ln.split("\t")
+        if len(cols) <= si:
+            continue
+        name = cols[si].strip()
+        ref = cols[ri].strip() if 0 <= ri < len(cols) else ""
+        samples.append((name, bool(ref)))
+    return samples or [("FAKE_A", False)]
+
+
+def tasks_for(samples, report_name):
+    """Exactly the process/tag pairs the real pipeline submits (26 for 2 samples
+    with references), in the order they are launched."""
+    out = []
+    for name, has_ref in samples:
+        out.extend([
+            ("FASTQC_RAW", "%s_1" % name),
+            ("FASTQC_RAW", "%s_2" % name),
+            ("TRIMMOMATIC", name),
+            ("FASTQC_TRIMMED", "%s_R1_paired" % name),
+            ("FASTQC_TRIMMED", "%s_R2_paired" % name),
+            ("SPADES", name),
+            ("QUAST", name),
+            ("BUSCO", name),
+            ("BAKTA", name),
+            ("CARVEME", name),
+            ("MEMOTE", name),
+        ])
+        if has_ref:
+            out.append(("ASSEMBLY_REF", name))
+    out.append(("GROWTH_CHECK", "cohort"))
+    out.append(("MULTIQC", report_name))
+    return out
+
+
+def hash_for(idx):
+    return "%02x/%06x" % ((idx * 37) % 256, (idx * 2654435761) % 0xFFFFFF)
+
+
+def report_path(ctrl, cwd, report_tag):
+    if ctrl.get("report"):
+        return str(ctrl["report"])
+    name = "multiqc_report" + ("_" + report_tag if report_tag else "")
+    return str(pathlib.Path(cwd) / "results" / "report" / ("%s.html" % name))
+
+
+def write_report(path, html):
+    p = pathlib.Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(html, encoding="utf-8")
+
+
+def write_results_files(ctrl, cwd):
+    """Publish a mini results tree so downloads can be checked against it.
+
+    Keys are paths relative to the project root (e.g. "results/assembly/A/x.fasta");
+    a test that sets `results_files` therefore knows the exact tarball contents.
+    Only mode=success writes these -- a failed or report-less run must not look
+    like it produced a complete tree.
+    """
+    for rel, body in (ctrl.get("results_files") or {}).items():
+        p = pathlib.Path(cwd) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(body), encoding="utf-8")
+
+
+def fail_block(process, tag, ctrl, cwd):
+    lines = [
+        "",
+        "ERROR ~ Error executing process > '%s (%s)'" % (process, tag),
+        "",
+        "Caused by:",
+        "  Process `%s` terminated with an error exit status (1)" % process,
+        "",
+        "Command executed:",
+        "",
+        "  fake-%s --input %s" % (process.lower(), tag),
+        "",
+        "Command exit status:",
+        "  1",
+        "",
+        "Command output:",
+        "  (empty)",
+        "",
+        "Command error:",
+        "  fake-nextflow: %s failed on purpose for %s" % (process, tag),
+        "  second line of the fake error output",
+        "  sentinel:FAKE_STDERR_TAIL",
+        "",
+        "Work dir:",
+        "  %s" % (pathlib.Path(cwd) / "work" / "ab" / "cdef0123456789"),
+        "",
+        "Tip: you can try to figure out what's wrong by changing to the process work dir and showing the script file named `.command.sh`",
+    ]
+    return "\n".join(lines)
+
+
+def main():
+    sub, opts = parse_argv(sys.argv[1:])
+    ctrl = load_ctrl()
+    cwd = os.getcwd()
+    extra_err = ctrl.get("stderr") or ""
+
+    # `nextflow -version`: the preflight asks once, cheaply.
+    if sub == "version":
+        emit("")
+        emit("      N E X T F L O W")
+        emit("      version %s build 0 (fake)" % ctrl.get("version", "26.10.0"))
+        emit("      created fake")
+        return 0
+
+    # `nextflow config -flat`: the UI learns output paths without parsing YAML.
+    if sub == "config":
+        if ctrl.get("config") == "fail":
+            sys.stderr.write("fake-nextflow: config failed on purpose\n")
+            return 1
+        report_dir = str(pathlib.Path(report_path(ctrl, cwd, opts["report_tag"])).parent)
+        emit("params.min_free_disk_gb = 20")
+        emit("params.multiqc_dir = '%s'" % report_dir)
+        emit("params.report_name = 'multiqc_report'")
+        emit("params.raw_dir = '%s'" % (pathlib.Path(cwd) / "data" / "raw"))
+        emit("params.ref_dir = '%s'" % (pathlib.Path(cwd) / "data" / "reference"))
+        return 0
+
+    if sub != "run":
+        sys.stderr.write("fake-nextflow: unexpected subcommand %r\n" % (sub,))
+        return 2
+
+    mode = ctrl.get("mode", "success")
+    delay = float(ctrl.get("delay", 0.02))
+    samples = read_sheet(opts["sheet"])
+    report_name = "multiqc_report" + ("_" + opts["report_tag"] if opts["report_tag"] else "")
+    tasks = tasks_for(samples, report_name)
+    if extra_err:
+        sys.stderr.write(extra_err + "\n")
+        sys.stderr.flush()
+
+    emit("")
+    emit(" N E X T F L O W   ~  version %s (fake)" % ctrl.get("version", "26.10.0"))
+    emit("")
+    emit("Launching `main.nf` [fake_%d] - revision: fake" % os.getpid())
+    emit("executor >  local (fake)")
+    emit("")
+
+    if mode == "slow":
+        # Never finishes: proves cancel/attach, and that a stuck run is visible.
+        i = 0
+        while True:
+            name, tag = tasks[i % len(tasks)]
+            emit("[%s] Submitted process > %s (%s)" % (hash_for(i), name, tag))
+            i += 1
+            time.sleep(max(delay, 0.2))
+
+    fail_at = None
+    if mode == "fail":
+        fail_sample = ctrl.get("fail_sample") or (samples[-1][0] if samples else None)
+        fail_process = ctrl.get("fail_process") or "SPADES"
+        for idx, (name, tag) in enumerate(tasks):
+            if name == fail_process and (fail_sample is None or tag == fail_sample or tag.startswith(fail_sample)):
+                fail_at = idx
+                break
+        if fail_at is None:
+            fail_at = 0
+
+    for idx, (name, tag) in enumerate(tasks):
+        emit("[%s] Submitted process > %s (%s)" % (hash_for(idx), name, tag))
+        time.sleep(delay)
+        if fail_at is not None and idx == fail_at:
+            emit(fail_block(name, tag, ctrl, cwd))
+            return 1
+        emit("[%s] Completed process > %s (%s)" % (hash_for(idx), name, tag))
+        time.sleep(delay)
+
+    if mode == "noreport":
+        # Exit 0, report absent: the UI must call this a failure, not a green check.
+        emit("")
+        emit("[NextFlow-WGS2GEM v0.1.0] workflow dir = %s" % cwd)
+        emit("[NextFlow-WGS2GEM v0.1.0] rerun a step = nextflow run . -resume (delete the output to force it)")
+        return 0
+
+    path = report_path(ctrl, cwd, opts["report_tag"])
+    write_results_files(ctrl, cwd)
+    write_report(path, ctrl.get("report_html"))
+    emit("")
+    emit("[NextFlow-WGS2GEM v0.1.0] workflow dir = %s" % cwd)
+    emit("[NextFlow-WGS2GEM v0.1.0] report       = %s" % path)
+    emit("[NextFlow-WGS2GEM v0.1.0] rerun a step = nextflow run . -resume (delete the output to force it)")
+    if mode == "fail":
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except Exception:
+        pass
+    sys.exit(main())
