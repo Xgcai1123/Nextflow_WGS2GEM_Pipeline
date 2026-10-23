@@ -97,8 +97,8 @@ class UIHandler(BaseHTTPRequestHandler):
             query = parse_qs(parts.query, keep_blank_values=True)
             if not self._origin_ok():
                 raise ApiError(403, "forbidden",
-                               "Origin 头不被允许(只接受 http://127.0.0.1:<port> "
-                               "或 http://localhost:<port>)")
+                               "Origin header not allowed (only http://127.0.0.1:<port> "
+                               "or http://localhost:<port>)")
             if path in STATIC_FILES and method == "GET":
                 self._serve_static(path)
                 return
@@ -108,13 +108,13 @@ class UIHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 if not self._token_ok(query):
                     raise ApiError(403, "forbidden",
-                                   "缺少或错误的 token;请使用启动器打印的完整 URL")
+                                   "Missing or incorrect token; open the full URL printed by the launcher")
                 if method == "GET":
                     self._route_get(path, query)
                 else:
                     self._route_post(path, query)
                 return
-            raise ApiError(404, "not_found", "未知路径: %s" % path)
+            raise ApiError(404, "not_found", "Unknown path: %s" % path)
         except ApiError as exc:
             if method == "POST" and exc.status >= 400:
                 # A POST may have been rejected before its body was consumed;
@@ -130,7 +130,7 @@ class UIHandler(BaseHTTPRequestHandler):
                                  % (method, self.path, exc))
                 self._send_json(500, {
                     "error": "internal_error",
-                    "message": "服务器内部错误: %s" % exc,
+                    "message": "Internal server error: %s" % exc,
                 })
             except (BrokenPipeError, ConnectionResetError):
                 self.close_connection = True
@@ -207,10 +207,10 @@ class UIHandler(BaseHTTPRequestHandler):
         cookie_ok = self._cookie_value(DEFAULT_TOKEN_COOKIE) == expected
         if query_token != expected and not cookie_ok:
             page = (
-                "<!DOCTYPE html><html lang=\"zh-CN\"><head>"
+                "<!DOCTYPE html><html lang=\"en\"><head>"
                 "<meta charset=\"utf-8\"><title>403 - NextFlow-WGS2GEM</title>"
-                "</head><body><h1>403 未授权</h1>"
-                "<p>请使用启动器打印的完整 URL(含 token)打开本页。</p>"
+                "</head><body><h1>403 Unauthorized</h1>"
+                "<p>Open this page with the full URL (including the token) printed by the launcher.</p>"
                 "</body></html>"
             )
             self._send_html(403, page)
@@ -221,11 +221,11 @@ class UIHandler(BaseHTTPRequestHandler):
                 body = fh.read()
         except OSError:
             page = (
-                "<!DOCTYPE html><html lang=\"zh-CN\"><head>"
+                "<!DOCTYPE html><html lang=\"en\"><head>"
                 "<meta charset=\"utf-8\"><title>NextFlow-WGS2GEM Web UI</title>"
-                "</head><body><h1>前端资源缺失</h1>"
-                "<p>找不到 <code>ui/index.html</code>;"
-                "API 仍可用,请补齐前端文件后刷新。</p>"
+                "</head><body><h1>Frontend assets missing</h1>"
+                "<p>Cannot find <code>ui/index.html</code>; "
+                "the API is still available -- restore the frontend files and reload.</p>"
                 "</body></html>"
             )
             self._send_html(503, page)
@@ -246,7 +246,7 @@ class UIHandler(BaseHTTPRequestHandler):
             with open(full, "rb") as fh:
                 body = fh.read()
         except OSError:
-            raise ApiError(404, "not_found", "静态资源不存在: %s" % name)
+            raise ApiError(404, "not_found", "Static asset not found: %s" % name)
         self._send_bytes(200, body, content_type)
 
     # -- routing ----------------------------------------------------------
@@ -268,7 +268,7 @@ class UIHandler(BaseHTTPRequestHandler):
         elif path == "/api/download":
             self._serve_download(query)
         else:
-            raise ApiError(404, "not_found", "未知 API: %s" % path)
+            raise ApiError(404, "not_found", "Unknown API endpoint: %s" % path)
 
     def _route_post(self, path, query):
         manager = self.server.manager
@@ -282,7 +282,7 @@ class UIHandler(BaseHTTPRequestHandler):
                 raise ApiError(409, exc.code, exc.message)
             self._send_json(200, {"cancel_requested": True})
         else:
-            raise ApiError(404, "not_found", "未知 API: %s" % path)
+            raise ApiError(404, "not_found", "Unknown API endpoint: %s" % path)
 
     def _server_info(self):
         return {
@@ -302,13 +302,13 @@ class UIHandler(BaseHTTPRequestHandler):
         # Busy is checked before body validation: while a run is active the
         # contract answer is 409, whatever the payload looks like.
         if manager.is_running():
-            raise ApiError(409, "busy", "已有运行正在进行",
+            raise ApiError(409, "busy", "A run is already in progress",
                            extra={"run": manager.snapshot()})
         external = manager.external_nextflow_pids()
         if external:
             raise ApiError(
                 409, "busy",
-                "检测到外部 nextflow 进程 (pid %s),请先结束它"
+                "Detected an external nextflow process (pid %s); stop it first"
                 % ", ".join(str(p) for p in external),
                 extra={"run": manager.snapshot()})
         body = self._read_json_body()
@@ -316,30 +316,30 @@ class UIHandler(BaseHTTPRequestHandler):
         mode = body.get("mode", "fresh")
         if mode not in ("fresh", "resume"):
             raise ApiError(400, "invalid_field",
-                           "mode 必须是 fresh 或 resume", {"field": "mode"})
+                           "mode must be fresh or resume", {"field": "mode"})
         profile = body.get("profile", "standard")
         if profile not in ("standard", "lowmem"):
             raise ApiError(400, "invalid_field",
-                           "profile 必须是 standard 或 lowmem",
+                           "profile must be standard or lowmem",
                            {"field": "profile"})
         clean = body.get("clean", False)
         if not isinstance(clean, bool):
-            raise ApiError(400, "invalid_field", "clean 必须是布尔值",
+            raise ApiError(400, "invalid_field", "clean must be a boolean",
                            {"field": "clean"})
         report_tag = body.get("report_tag", "") or ""
         if not isinstance(report_tag, str):
-            raise ApiError(400, "invalid_field", "report_tag 必须是字符串",
+            raise ApiError(400, "invalid_field", "report_tag must be a string",
                            {"field": "report_tag"})
         if report_tag and not REPORT_TAG_RE.match(report_tag):
             raise ApiError(400, "invalid_field",
-                           "report_tag 只允许字母、数字、点、下划线和连字符",
+                           "report_tag may only contain letters, digits, dots, underscores and hyphens",
                            {"field": "report_tag"})
 
         samples = body.get("samples")
         validation = sheet.validate_samples(samples)
         if validation["errors"]:
             # contract section 6: row+field+code errors are top-level
-            raise ApiError(400, "validation_failed", "样本表校验失败",
+            raise ApiError(400, "validation_failed", "Sample sheet validation failed",
                            extra={"errors": validation["errors"]})
         try:
             run = manager.start(samples, mode, clean, profile, report_tag)
@@ -376,12 +376,12 @@ class UIHandler(BaseHTTPRequestHandler):
         content_type = content_type.strip().lower()
         if content_type != "application/json":
             raise ApiError(400, "bad_content_type",
-                           "POST 只接受 application/json")
+                           "POST only accepts application/json")
         raw_length = self.headers.get("Content-Length")
         try:
             length = int(raw_length)
         except (TypeError, ValueError):
-            raise ApiError(400, "bad_request", "缺少有效的 Content-Length")
+            raise ApiError(400, "bad_request", "Missing a valid Content-Length")
         if length > MAX_BODY_BYTES:
             # Drain a bounded prefix before answering: replying while the client
             # is still writing would turn the 413 into a broken pipe.  Then close
@@ -396,16 +396,16 @@ class UIHandler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             self.close_connection = True
-            raise ApiError(413, "body_too_large", "请求体超过 1 MiB")
+            raise ApiError(413, "body_too_large", "Request body exceeds 1 MiB")
         if length <= 0:
-            raise ApiError(400, "invalid_json", "请求体为空")
+            raise ApiError(400, "invalid_json", "Request body is empty")
         data = self.rfile.read(length)
         try:
             parsed = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
-            raise ApiError(400, "invalid_json", "请求体不是合法 JSON: %s" % exc)
+            raise ApiError(400, "invalid_json", "Request body is not valid JSON: %s" % exc)
         if not isinstance(parsed, dict):
-            raise ApiError(400, "invalid_json", "请求体必须是 JSON 对象")
+            raise ApiError(400, "invalid_json", "Request body must be a JSON object")
         return parsed
 
     # -- GET /api/fs ------------------------------------------------------
@@ -416,16 +416,16 @@ class UIHandler(BaseHTTPRequestHandler):
             requested = manager.params.get("raw_dir") or self.server.project
         requested = os.path.expanduser(str(requested))
         if not os.path.isabs(requested):
-            raise ApiError(400, "not_a_directory", "path 必须是绝对路径",
+            raise ApiError(400, "not_a_directory", "path must be an absolute path",
                            {"path": requested})
         real = os.path.realpath(requested)
         if not os.path.isdir(real):
-            raise ApiError(400, "not_a_directory", "不是目录: %s" % real,
+            raise ApiError(400, "not_a_directory", "Not a directory: %s" % real,
                            {"path": real})
         try:
             names = sorted(os.listdir(real), key=lambda s: s.lower())
         except OSError as exc:
-            raise ApiError(400, "not_a_directory", "无法读取目录: %s" % exc,
+            raise ApiError(400, "not_a_directory", "Cannot read directory: %s" % exc,
                            {"path": real})
         dirs = []
         files = []
@@ -468,7 +468,7 @@ class UIHandler(BaseHTTPRequestHandler):
         report = self.server.manager.report_path()
         path = (report or {}).get("path")
         if not path or not os.path.isfile(path):
-            raise ApiError(404, "no_report", "还没有定位到 MultiQC 报告")
+            raise ApiError(404, "no_report", "No MultiQC report located yet")
         self._stream_file(path, "text/html; charset=utf-8",
                           extra_headers={"X-UI-Report-Path": _header_value(path)})
 
@@ -481,26 +481,26 @@ class UIHandler(BaseHTTPRequestHandler):
             report = manager.report_path()
             path = (report or {}).get("path")
             if not path or not os.path.isfile(path):
-                raise ApiError(404, "no_report", "还没有定位到 MultiQC 报告")
+                raise ApiError(404, "no_report", "No MultiQC report located yet")
             self._stream_file(path, "text/html; charset=utf-8",
                               download_name=os.path.basename(path),
                               extra_headers={"X-UI-Report-Path": _header_value(path)})
         elif what == "log":
             path = manager.log_path()
             if not path or not os.path.isfile(path):
-                raise ApiError(404, "no_log", "还没有运行日志")
+                raise ApiError(404, "no_log", "No run log yet")
             self._stream_file(path, "text/plain; charset=utf-8",
                               download_name="run.log")
         else:
             raise ApiError(400, "bad_what",
-                           "what 必须是 results、report 或 log")
+                           "what must be results, report or log")
 
     def _stream_file(self, path, content_type, download_name=None,
                      extra_headers=None):
         try:
             size = os.path.getsize(path)
         except OSError as exc:
-            raise ApiError(404, "not_found", "文件不存在: %s" % exc)
+            raise ApiError(404, "not_found", "File does not exist: %s" % exc)
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(size))
@@ -531,7 +531,7 @@ class UIHandler(BaseHTTPRequestHandler):
         manager = self.server.manager
         root = manager.results_root()
         if not os.path.isdir(root):
-            raise ApiError(404, "no_results", "结果目录不存在: %s" % root)
+            raise ApiError(404, "no_results", "Results directory does not exist: %s" % root)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         filename = "results-%s.tar.gz" % stamp
         self.send_response(200)
@@ -590,7 +590,15 @@ class UIHandler(BaseHTTPRequestHandler):
         while True:
             run = manager.snapshot()
             run_id = (run or {}).get("id")
-            state_key = (run_id, (run or {}).get("state"))
+            # Push a state event when progress moves too, not only when the state
+            # name changes: otherwise an open page sees "running" once and the
+            # counters/ladder freeze (they would only be rescued by the 5 s poll;
+            # the user's "the Run module does not update" report, F51). 26 tasks
+            # produce 26 extra ~1 KB events per run, which is nothing.
+            tasks = (run or {}).get("tasks") or {}
+            state_key = (run_id, (run or {}).get("state"),
+                         tasks.get("submitted"), tasks.get("completed"),
+                         tasks.get("failed"))
             if state_key != emitted_state:
                 self._sse_write("state",
                                 json.dumps({"run": run}, ensure_ascii=False))
@@ -708,7 +716,7 @@ def _create_http_server(host, requested_port):
             continue
         return httpd
     raise SystemExit(
-        "pipeline-ui: 无法绑定 %s 的端口(请求 %s,尝试 20 个): %s"
+        "pipeline-ui: cannot bind a port on %s (requested %s, tried 20): %s"
         % (host, requested_port, last_error))
 
 
@@ -755,26 +763,26 @@ def _acquire_lock(ui_dir):
 def _parse_args(argv):
     parser = argparse.ArgumentParser(
         prog="pipeline-ui",
-        description="NextFlow-WGS2GEM 本地 Web UI(单实例、单任务、127.0.0.1)",
+        description="NextFlow-WGS2GEM local Web UI (single instance, single task, 127.0.0.1)",
     )
     parser.add_argument("--project", default=os.getcwd(),
-                        help="项目根目录,必须含 main.nf + nextflow.config(默认当前目录)")
+                        help="project root; must contain main.nf + nextflow.config (default: current directory)")
     parser.add_argument("--port", type=int, default=8787,
-                        help="监听端口(默认 8787;被占用则 +1 最多试 20 个;0 = 系统分配)")
+                        help="listen port (default 8787; if busy, +1 up to 20 tries; 0 = system-assigned)")
     parser.add_argument("--host", default="127.0.0.1",
-                        help="监听地址(默认 127.0.0.1;非回环地址会打印警告)")
+                        help="listen address (default 127.0.0.1; non-loopback prints a warning)")
     parser.add_argument("--nextflow", default=None,
-                        help="nextflow 可执行文件;默认依次找 PATH、"
+                        help="nextflow executable; by default looks on PATH, then "
                              "~/miniforge3/envs/nextflow/bin/nextflow")
     parser.add_argument("--token", default=None,
-                        help="固定 token(测试用);默认随机生成")
+                        help="fixed token (for tests); random by default")
     parser.add_argument("--no-open", action="store_true", default=False,
-                        help="不自动打开浏览器")
+                        help="do not open the browser automatically")
     parser.add_argument("--print-url", action="store_true", default=False,
-                        help="启动成功后向 stdout 打印一行 UI_READY {json},然后阻塞")
+                        help="after a successful start, print one UI_READY {json} line to stdout, then block")
     parser.add_argument("--nextflow-arg", action="append", default=[],
                         metavar="ARG",
-                        help="可重复;追加到 nextflow run 命令行末尾(测试/高级使用)")
+                        help="repeatable; appended to the end of the nextflow run command line (testing/advanced use)")
     return parser.parse_args(argv)
 
 
@@ -784,13 +792,13 @@ def main(argv=None):
     if not str(args.project or "").strip():
         # An explicit empty --project must not silently mean "the cwd": that is
         # how a test/client typo writes runtime state into the real checkout.
-        sys.stderr.write("pipeline-ui: --project 不能为空\n")
+        sys.stderr.write("pipeline-ui: --project must not be empty\n")
         return 1
     project = os.path.abspath(os.path.expanduser(args.project))
     for required in ("main.nf", "nextflow.config"):
         if not os.path.isfile(os.path.join(project, required)):
             sys.stderr.write(
-                "pipeline-ui: %s 不是项目根目录(缺少 %s)\n"
+                "pipeline-ui: %s is not a project root (missing %s)\n"
                 % (project, required))
             return 1
 
@@ -802,14 +810,14 @@ def main(argv=None):
     loopback = host in ("127.0.0.1", "localhost", "::1")
     if not loopback:
         sys.stderr.write(
-            "pipeline-ui: 警告: --host %s 不是回环地址,局域网内可访问;"
-            "本 UI 只做了本地单用户防护,请勿在不可信网络使用\n" % host)
+            "pipeline-ui: warning: --host %s is not a loopback address; it is reachable on the LAN, "
+            "and this UI only protects a local single user -- do not use it on an untrusted network\n" % host)
 
     nextflow = runner.resolve_nextflow(args.nextflow)
     params, config_error = runner.read_flat_config(
         project, nextflow, args.nextflow_arg)
     if config_error:
-        sys.stderr.write("pipeline-ui: %s(使用内置默认路径)\n" % config_error)
+        sys.stderr.write("pipeline-ui: %s (using built-in default paths)\n" % config_error)
 
     manager = runner.RunManager(
         project=project, nextflow=nextflow, extra_args=args.nextflow_arg,
@@ -854,10 +862,10 @@ def main(argv=None):
         sys.stdout.flush()
     else:
         print("NextFlow-WGS2GEM Web UI")
-        print("  项目:     %s" % project)
-        print("  nextflow: %s" % (nextflow or "(未找到)"))
+        print("  project:  %s" % project)
+        print("  nextflow: %s" % (nextflow or "(not found)"))
         print("  URL:      %s" % httpd.url)
-        print("  按 Ctrl-C 退出(退出时会取消正在进行的运行)")
+        print("  press Ctrl-C to quit (an active run is cancelled on exit)")
         sys.stdout.flush()
 
     if not args.no_open:

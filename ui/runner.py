@@ -533,7 +533,7 @@ def looks_like_nextflow(cmd):
     launcher = ("nextflow.cli.launcher" in low or "nextflow.jar" in low)
     if not launcher:
         # Any argument whose basename is exactly the launcher (covers
-        # `python …/fake-nextflow`, `sh -c 'cd x && nextflow run .'`, and the
+        # `python .../fake-nextflow`, `sh -c 'cd x && nextflow run .'`, and the
         # conda script itself); `--nextflow /path/nextflow` is harmless because
         # the "run" requirement below still has to hold.
         launcher = any(os.path.basename(tok).lower() in _NEXTFLOW_EXE_NAMES
@@ -656,7 +656,7 @@ def read_flat_config(project, nextflow, extra_args):
     """
     params = default_params(project)
     if not nextflow:
-        return params, "未找到 nextflow,无法执行 config -flat"
+        return params, "nextflow not found, cannot run config -flat"
     overlay = _config_overlay_args(extra_args)
     attempts = []
     if overlay:
@@ -670,19 +670,19 @@ def read_flat_config(project, nextflow, extra_args):
                 capture_output=True, text=True, timeout=15,
             )
         except subprocess.TimeoutExpired:
-            last_error = "nextflow config -flat 超时(15s)"
+            last_error = "nextflow config -flat timed out (15s)"
             continue
         except OSError as exc:
-            last_error = "nextflow config -flat 无法执行: %s" % exc
+            last_error = "nextflow config -flat could not be executed: %s" % exc
             continue
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
-            last_error = "nextflow config -flat 退出码 %d: %s" % (
+            last_error = "nextflow config -flat exited with code %d: %s" % (
                 proc.returncode, " / ".join(tail))
             continue
         parsed = parse_flat_config(proc.stdout or "")
         if not parsed:
-            last_error = "nextflow config -flat 输出无法解析"
+            last_error = "nextflow config -flat output could not be parsed"
             continue
         params.update(parsed)
         # `params.report_name` is assigned at *runtime* in main.nf's workflow
@@ -880,7 +880,7 @@ class RunManager(object):
             "reason": "interrupted",
             "work_dir": None,
             "stderr_tail": None,
-            "message": "上次运行在 UI 退出后结束/被杀,请用 -resume 续跑",
+            "message": "The previous run ended or was killed after the UI exited; use -resume to continue",
         }
         self._attach_parser_locked(replay=True)
         self._persist_locked()
@@ -1035,20 +1035,20 @@ class RunManager(object):
         """
         with self.lock:
             if self.run and self.run.get("state") == "running":
-                raise BusyError("已有运行正在进行", copy.deepcopy(self.run))
+                raise BusyError("A run is already in progress", copy.deepcopy(self.run))
             details = self.external_nextflow_details()
             if details:
                 shown = "; ".join(
                     "pid %d (%s)" % (pid, (cmd or "")[:80])
                     for pid, cmd in details[:3])
                 raise BusyError(
-                    "检测到外部 nextflow 进程: %s;同时运行会争用 work/ 与 results/"
+                    "Detected an external nextflow process: %s; running concurrently would contend for work/ and results/"
                     % shown,
                     copy.deepcopy(self.run))
             if not (self.nextflow and os.path.isfile(self.nextflow)
                     and os.access(self.nextflow, os.X_OK)):
                 raise NextflowMissingError(
-                    "找不到 nextflow 可执行文件: %s;请用 --nextflow 指定"
+                    "nextflow executable not found: %s; specify one with --nextflow"
                     % (self.nextflow or "nextflow"))
 
             run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(3).hex()
@@ -1108,7 +1108,7 @@ class RunManager(object):
             proc = self._spawn(argv)
         except OSError as exc:
             self._finalize_failed("spawn_failed",
-                                  "无法启动 nextflow: %s" % exc)
+                                  "Could not start nextflow: %s" % exc)
             return self.run
         with self.lock:
             run = self.run
@@ -1147,7 +1147,7 @@ class RunManager(object):
         if not (os.path.isfile(clean_bin) and os.access(clean_bin, os.X_OK)):
             self._finalize_failed(
                 "clean_failed",
-                "运行前清空产物失败: 找不到可执行的 bin/pipeline-clean")
+                "Pre-run cleanup failed: no executable bin/pipeline-clean found")
             return False
         log = self.run.get("log")
         try:
@@ -1159,17 +1159,17 @@ class RunManager(object):
                 )
         except subprocess.TimeoutExpired:
             self._finalize_failed("clean_failed",
-                                  "运行前清空产物超时(30 分钟),未启动 nextflow")
+                                  "Pre-run cleanup timed out (30 minutes); nextflow was not started")
             return False
         except OSError as exc:
             self._finalize_failed("clean_failed",
-                                  "运行前清空产物无法执行: %s" % exc)
+                                  "Pre-run cleanup could not be executed: %s" % exc)
             return False
         if proc.returncode != 0:
             self._finalize_failed(
                 "clean_failed",
-                "运行前清空产物失败: bin/pipeline-clean outputs --yes "
-                "退出码 %d,未启动 nextflow" % proc.returncode,
+                "Pre-run cleanup failed: bin/pipeline-clean outputs --yes "
+                "exited with code %d; nextflow was not started" % proc.returncode,
                 exit_code=proc.returncode)
             return False
         return True
@@ -1209,16 +1209,16 @@ class RunManager(object):
         with self.lock:
             run = self.run
             if run is None or run.get("state") != "running":
-                raise NoActiveRunError("没有活动运行")
+                raise NoActiveRunError("No active run")
             proc = self.proc
             pid = run.get("pid")
             if proc is None:
                 # attached run: the pid is the only handle we have
                 if not self._pid_alive_and_nextflow(pid):
                     raise NoActiveRunError(
-                        "attach 的运行进程已不在,无法取消")
+                        "The attached run process is gone; cannot cancel")
             elif not pid:
-                raise NoActiveRunError("运行没有可用的 pid,无法取消")
+                raise NoActiveRunError("The run has no usable pid; cannot cancel")
             run["cancel_requested"] = True
             self._persist_locked()
         thread = threading.Thread(
@@ -1328,15 +1328,15 @@ class RunManager(object):
                     run["state"] = "failed"
                     run["failed"] = self._failed_payload(
                         "unknown_exit",
-                        "上次运行在 UI 退出后结束/被杀;未拿到退出码,"
-                        "且报告缺失或日志含 ERROR 块,请用 -resume 续跑")
+                        "The previous run ended or was killed after the UI exited; no exit code was captured, "
+                        "and the report is missing or the log contains an ERROR block; use -resume to continue")
             elif exit_code == 0 and report is not None:
                 run["state"] = "done"
             elif exit_code == 0:
                 run["state"] = "failed"
                 run["failed"] = self._failed_payload(
                     "report_missing",
-                    "管线退出码为 0,但没有找到 MultiQC 报告")
+                    "The pipeline exited with code 0 but no MultiQC report was found")
             else:
                 run["state"] = "failed"
                 run["failed"] = self._task_failed_payload(exit_code)
@@ -1387,10 +1387,10 @@ class RunManager(object):
         process = fail.get("process")
         tag = fail.get("tag")
         if process:
-            message = "%s 在样本 %s 上以退出码 %s 失败" % (
-                process, tag or "(未知)", task_exit)
+            message = "%s failed on sample %s with exit code %s" % (
+                process, tag or "(unknown)", task_exit)
         else:
-            message = "管线以退出码 %s 失败(日志中没有可定位的失败任务)" % exit_code
+            message = "The pipeline failed with exit code %s (no failing task could be located in the log)" % exit_code
         payload = self._failed_payload("task_failed", message)
         payload["process"] = process
         payload["tag"] = tag
@@ -1530,9 +1530,9 @@ class RunManager(object):
                 "id": "config",
                 "label": "Nextflow config",
                 "status": "warn",
-                "detail": "nextflow config -flat 不可用,使用内置默认路径",
-                "hint": "报告路径将以日志中的 onComplete 行为准;"
-                        "可用 --nextflow 指定引擎后重启",
+                "detail": "nextflow config -flat unavailable; using built-in default paths",
+                "hint": "The report path follows the onComplete line in the log; "
+                        "specify an engine with --nextflow and restart",
             })
 
         # -- Nextflow ------------------------------------------------------
@@ -1549,14 +1549,14 @@ class RunManager(object):
             else:
                 checks.append({
                     "id": "nextflow", "label": "Nextflow", "status": "fail",
-                    "detail": "%s -version 失败(退出码 %s)" % (nf, rc),
-                    "hint": "重新安装 Nextflow >=25.10,或用 --nextflow 指定可执行文件",
+                    "detail": "%s -version failed (exit code %s)" % (nf, rc),
+                    "hint": "Reinstall Nextflow >=25.10, or specify the executable with --nextflow",
                 })
         else:
             checks.append({
                 "id": "nextflow", "label": "Nextflow", "status": "fail",
-                "detail": "未找到 nextflow 可执行文件",
-                "hint": "安装 Nextflow >=25.10,或使用 --nextflow PATH",
+                "detail": "nextflow executable not found",
+                "hint": "Install Nextflow >=25.10, or use --nextflow PATH",
             })
 
         # -- Java ----------------------------------------------------------
@@ -1574,17 +1574,17 @@ class RunManager(object):
                     checks.append({
                         "id": "java", "label": "Java 17+", "status": "warn",
                         "detail": "Java %d (%s)" % (major, java),
-                        "hint": "Nextflow 26 建议 Java 17+",
+                        "hint": "Nextflow 26 recommends Java 17+",
                     })
             else:
                 checks.append({
                     "id": "java", "label": "Java 17+", "status": "fail",
-                    "detail": "java -version 无法执行", "hint": "安装 JDK 17+",
+                    "detail": "java -version could not be executed", "hint": "Install JDK 17+",
                 })
         else:
             checks.append({
                 "id": "java", "label": "Java 17+", "status": "fail",
-                "detail": "未找到 java", "hint": "安装 JDK 17+ (或 conda install openjdk)",
+                "detail": "java not found", "hint": "Install JDK 17+ (or conda install openjdk)",
             })
 
         # -- conda / mamba ------------------------------------------------
@@ -1597,8 +1597,8 @@ class RunManager(object):
         else:
             checks.append({
                 "id": "conda", "label": "conda / mamba", "status": "fail",
-                "detail": "未找到 mamba/conda",
-                "hint": "安装 Miniforge,或把 mamba/conda 放进 PATH",
+                "detail": "mamba/conda not found",
+                "hint": "Install Miniforge, or put mamba/conda on PATH",
             })
 
         # -- Bakta db-light sentinel --------------------------------------
@@ -1608,13 +1608,13 @@ class RunManager(object):
         if os.path.isfile(marker):
             checks.append({
                 "id": "bakta_db", "label": "Bakta db-light", "status": "ok",
-                "detail": "version.json 存在", "hint": "",
+                "detail": "version.json present", "hint": "",
             })
         else:
             checks.append({
                 "id": "bakta_db", "label": "Bakta db-light", "status": "warn",
-                "detail": "version.json 不存在: %s" % marker,
-                "hint": "首次运行会下载 db-light(约 4 GiB,需网络)",
+                "detail": "version.json missing: %s" % marker,
+                "hint": "The first run downloads db-light (about 4 GiB, network required)",
             })
 
         # -- BUSCO lineage ------------------------------------------------
@@ -1649,9 +1649,9 @@ class RunManager(object):
         else:
             checks.append({
                 "id": "busco_db", "label": "BUSCO lineage", "status": "warn",
-                "detail": "%s 未下载 (%s)" % (
-                    lineage, " 或 ".join(lineage_candidates)),
-                "hint": "首次运行会下载 lineage(需网络)",
+                "detail": "%s not downloaded (%s)" % (
+                    lineage, " or ".join(lineage_candidates)),
+                "hint": "The first run downloads the lineage (network required)",
             })
 
         # -- built conda environments ------------------------------------
@@ -1659,14 +1659,14 @@ class RunManager(object):
         envs = count_conda_envs(conda_dir)
         if envs >= 8:
             checks.append({
-                "id": "conda_envs", "label": "conda 环境", "status": "ok",
-                "detail": "%d/8 已构建" % envs, "hint": "",
+                "id": "conda_envs", "label": "conda environments", "status": "ok",
+                "detail": "%d/8 built" % envs, "hint": "",
             })
         else:
             checks.append({
-                "id": "conda_envs", "label": "conda 环境", "status": "warn",
-                "detail": "%d/8 已构建" % envs,
-                "hint": "首次运行需构建 8 个环境(约 5.7 GiB,需网络),可能远超 45 分钟",
+                "id": "conda_envs", "label": "conda environments", "status": "warn",
+                "detail": "%d/8 built" % envs,
+                "hint": "The first run builds 8 environments (about 5.7 GiB, network required) and may take far longer than 45 minutes",
             })
 
         # -- disk ---------------------------------------------------------
@@ -1674,17 +1674,17 @@ class RunManager(object):
         free_gb, usage_path = _free_disk_gb(self.project)
         if required <= 0 or free_gb >= required:
             checks.append({
-                "id": "disk", "label": "磁盘", "status": "ok",
-                "detail": "%.1f GiB 可用 (需 ≥%g)" % (free_gb, required),
+                "id": "disk", "label": "Disk", "status": "ok",
+                "detail": "%.1f GiB free (requires >=%g)" % (free_gb, required),
                 "hint": "",
             })
         else:
             checks.append({
-                "id": "disk", "label": "磁盘", "status": "fail",
-                "detail": "%.1f GiB 可用 (< 需 %g GiB)" % (free_gb, required),
-                "hint": "先释放空间: bin/pipeline-clean outputs --yes,"
-                        "或 bin/pipeline-clean all --yes;"
-                        "也可调低 min_free_disk_gb",
+                "id": "disk", "label": "Disk", "status": "fail",
+                "detail": "%.1f GiB free (< %g GiB required)" % (free_gb, required),
+                "hint": "Free space first: bin/pipeline-clean outputs --yes, "
+                        "or bin/pipeline-clean all --yes; "
+                        "you can also lower min_free_disk_gb",
             })
         disk = {"free_gb": round(free_gb, 1), "required_gb": required,
                 "path": usage_path}
@@ -1693,16 +1693,16 @@ class RunManager(object):
         external = self.external_nextflow_pids()
         if external:
             checks.append({
-                "id": "external_nextflow", "label": "外部 nextflow 进程",
+                "id": "external_nextflow", "label": "External nextflow processes",
                 "status": "warn",
-                "detail": "发现 %d 个: pid %s" % (
+                "detail": "%d found: pid %s" % (
                     len(external), ", ".join(str(p) for p in external)),
-                "hint": "同时运行会争用 work/ 与 results/;开始运行会被拒绝",
+                "hint": "Running concurrently would contend for work/ and results/; starting a run will be refused",
             })
         else:
             checks.append({
-                "id": "external_nextflow", "label": "外部 nextflow 进程",
-                "status": "ok", "detail": "无", "hint": "",
+                "id": "external_nextflow", "label": "External nextflow processes",
+                "status": "ok", "detail": "None", "hint": "",
             })
 
         failures = sum(1 for c in checks if c["status"] == "fail")
@@ -1745,13 +1745,13 @@ class RunManager(object):
         """`pipeline-clean check` (deletes nothing) for the confirmation dialog."""
         clean_bin = os.path.join(self.project, "bin", "pipeline-clean")
         if not (os.path.isfile(clean_bin) and os.access(clean_bin, os.X_OK)):
-            return {"level": "outputs", "text": "bin/pipeline-clean 不存在"}
+            return {"level": "outputs", "text": "bin/pipeline-clean not found"}
         rc, out = _run_cmd([clean_bin, "check"], timeout=15, cwd=self.project)
         text = out.strip()
         if len(text) > 12000:
-            text = text[:12000] + "\n…(截断)"
+            text = text[:12000] + "\n...(truncated)"
         if rc != 0:
-            text = ("pipeline-clean check 退出码 %d\n%s" % (rc, text)).strip()
+            text = ("pipeline-clean check exited with code %d\n%s" % (rc, text)).strip()
         return {"level": "outputs", "text": text}
 
 

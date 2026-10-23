@@ -43,11 +43,11 @@ def _check_meta(value, field, row, errors):
     if value is None:
         return ""
     if not isinstance(value, str):
-        _add_error(errors, row, field, "invalid", "第 %d 行 %s 必须是字符串" % (row, field))
+        _add_error(errors, row, field, "invalid", "Row %d %s must be a string" % (row, field))
         return ""
     if _bad_chars(value):
         _add_error(errors, row, field, "invalid_chars",
-                   "第 %d 行 %s 不能包含 tab 或换行" % (row, field))
+                   "Row %d %s must not contain tabs or newlines" % (row, field))
         return value
     return value
 
@@ -57,47 +57,47 @@ def _check_path(value, field, row, errors, warnings, required):
     if value is None:
         value = ""
     if not isinstance(value, str):
-        _add_error(errors, row, field, "invalid", "第 %d 行 %s 必须是字符串" % (row, field))
+        _add_error(errors, row, field, "invalid", "Row %d %s must be a string" % (row, field))
         return ""
     if _bad_chars(value):
         _add_error(errors, row, field, "invalid_chars",
-                   "第 %d 行 %s 不能包含 tab 或换行" % (row, field))
+                   "Row %d %s must not contain tabs or newlines" % (row, field))
         return ""
     if value == "":
         if required:
             _add_error(errors, row, field, "required",
-                       "第 %d 行 %s 必填" % (row, field))
+                       "Row %d %s is required" % (row, field))
         return ""
     if not value.startswith("/"):
         _add_error(errors, row, field, "not_absolute",
-                   "第 %d 行 %s 必须是绝对路径: %s" % (row, field, value))
+                   "Row %d %s must be an absolute path: %s" % (row, field, value))
         return value
     path = os.path.realpath(os.path.expanduser(value))
     if not os.path.exists(path):
         _add_error(errors, row, field, "not_found",
-                   "第 %d 行 %s 不存在: %s" % (row, field, path))
+                   "Row %d %s does not exist: %s" % (row, field, path))
         return value
     if not os.path.isfile(path):
         _add_error(errors, row, field, "not_file",
-                   "第 %d 行 %s 不是普通文件: %s" % (row, field, path))
+                   "Row %d %s is not a regular file: %s" % (row, field, path))
         return value
     if not os.access(path, os.R_OK):
         _add_error(errors, row, field, "unreadable",
-                   "第 %d 行 %s 不可读: %s" % (row, field, path))
+                   "Row %d %s is not readable: %s" % (row, field, path))
         return value
     try:
         if os.path.getsize(path) == 0:
             _add_error(errors, row, field, "empty_file",
-                       "第 %d 行 %s 是空文件: %s" % (row, field, path))
+                       "Row %d %s is an empty file: %s" % (row, field, path))
             return value
     except OSError as exc:
         _add_error(errors, row, field, "unreadable",
-                   "第 %d 行 %s 无法读取: %s (%s)" % (row, field, path, exc))
+                   "Row %d %s cannot be read: %s (%s)" % (row, field, path, exc))
         return value
     if field in ("fq1", "fq2") and not path.lower().endswith(GZIP_SUFFIXES):
         warnings.append({
             "row": row, "field": field, "code": "not_gzip",
-            "message": "第 %d 行 %s 不是 .gz 压缩文件,管线可能无法处理: %s"
+            "message": "Row %d %s is not a .gz file; the pipeline may not be able to process it: %s"
                        % (row, field, path),
         })
     return value
@@ -114,10 +114,10 @@ def validate_samples(samples):
     warnings = []
 
     if not isinstance(samples, list):
-        _add_error(errors, 0, "samples", "no_samples", "samples 必须是数组")
+        _add_error(errors, 0, "samples", "no_samples", "samples must be an array")
         return {"errors": errors, "warnings": warnings}
     if len(samples) == 0:
-        _add_error(errors, 0, "samples", "no_samples", "至少需要一个样本")
+        _add_error(errors, 0, "samples", "no_samples", "At least one sample is required")
         return {"errors": errors, "warnings": warnings}
 
     seen = {}
@@ -125,29 +125,29 @@ def validate_samples(samples):
         row = idx + 2  # row 1 is the header
         if not isinstance(item, dict):
             _add_error(errors, row, "samples", "invalid",
-                       "第 %d 个样本必须是对象" % row)
+                       "Sample %d must be an object" % row)
             continue
 
         name = item.get("name")
         if name is None:
             name = item.get("sample")
         if name is None or not isinstance(name, str) or name == "":
-            _add_error(errors, row, "sample", "empty", "第 %d 行 sample 不能为空" % row)
+            _add_error(errors, row, "sample", "empty", "Row %d sample must not be empty" % row)
             name = ""
         elif _bad_chars(name):
             _add_error(errors, row, "sample", "invalid_chars",
-                       "第 %d 行 sample 不能包含 tab 或换行" % row)
+                       "Row %d sample must not contain tabs or newlines" % row)
         elif not NAME_RE.match(name):
             _add_error(errors, row, "sample", "invalid",
-                       "第 %d 行 sample 只能包含字母、数字、点、下划线、连字符: %s"
+                       "Row %d sample may only contain letters, digits, dots, underscores and hyphens: %s"
                        % (row, name))
         elif name in (".", ".."):
             _add_error(errors, row, "sample", "invalid",
-                       "第 %d 行 sample 不能是 %s" % (row, name))
+                       "Row %d sample must not be %s" % (row, name))
         if name and name not in ("", ".", ".."):
             if name in seen:
                 _add_error(errors, row, "sample", "duplicate",
-                           "第 %d 行 sample 重复: %s(第 %d 行已使用)"
+                           "Row %d sample is duplicated: %s (already used on row %d)"
                            % (row, name, seen[name]))
             else:
                 seen[name] = row
@@ -160,7 +160,7 @@ def validate_samples(samples):
             if os.path.realpath(os.path.expanduser(fq1)) == \
                     os.path.realpath(os.path.expanduser(fq2)):
                 _add_error(errors, row, "fq2", "same_file",
-                           "第 %d 行 fq2 与 fq1 是同一个文件: %s" % (row, fq2))
+                           "Row %d fq2 is the same file as fq1: %s" % (row, fq2))
 
         _check_path(item.get("reference"), "reference", row, errors, warnings,
                     required=False)
@@ -200,7 +200,7 @@ def write_sheet(path, samples):
 
 
 def _field(value):
-    """None/省略 -> empty column; strings verbatim (validated to be TSV-safe)."""
+    """None/omitted -> empty column; strings verbatim (validated to be TSV-safe)."""
     if value is None:
         return ""
     return value if isinstance(value, str) else str(value)
