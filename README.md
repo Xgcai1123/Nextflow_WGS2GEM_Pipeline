@@ -43,6 +43,8 @@ four-minute quality suite (F29).
 - **Nextflow ≥ 25.10** (strict-syntax era; developed and validated on 26.10.0)
 - **conda** or **mamba** on `PATH` (all environments are created automatically)
 - **Java 17+** (bundled with the conda `nextflow` package if installed that way)
+- **Python 3.8+** — needed only by the optional local web UI (`bin/pipeline-ui`); the
+  pipeline itself never calls it (the two report embedders run inside the conda environments)
 - **Disk space**: allow **≥ 20 GB free** on the volume that holds `work/` and the output
   directories. This is **enforced, not just documented**: the workflow refuses to start when
   a volume is below the floor, names the shortfall, and prints what can safely be deleted. A
@@ -129,8 +131,46 @@ bash tests/ci/run-preview.sh               # compile + sample-sheet validation, 
 bash tests/ci/run-disk-guard.sh            # disk pre-flight, all three branches
 bash tests/ci/run-stub-smoke.sh            # full DAG (25 tasks) + published output contract
 bash tests/ci/run-failure-isolation.sh     # injected single-sample failure + -resume
+bash tests/ci/run-ui-check.sh              # local UI contract (fake engine + stub DAG)
 PYTHON=.../bin/python3 bash tests/ci/run-growth-check.sh   # defined-medium growth (needs cobra)
 ```
+
+### Local web UI — one run, in a browser
+
+`bin/pipeline-ui` starts a browser interface for **exactly one run at a time**, bound to
+`127.0.0.1`. It is a local UI by design, not a web service: no account, no multi-user, no
+upload, and no deletion surface of its own.
+
+```bash
+bin/pipeline-ui                                   # print the token URL and open the browser
+bin/pipeline-ui --port 8787 --no-open             # scripted / remote-shell use
+bin/pipeline-ui --nextflow ~/miniforge3/envs/nextflow/bin/nextflow   # engine not on PATH
+```
+
+It needs **python3 ≥ 3.8** (standard library only — no pip, no npm) on top of what a normal run
+needs. Everything else is the pipeline you already have: the UI writes a sample sheet and runs
+`nextflow run . --samples_tsv …`, the report it shows is the same self-contained MultiQC page
+(≈15 MB) in an iframe, and the download is the real `results/` tree as a tar.gz.
+
+The flow is this README's flow with the file picker replaced by the local filesystem: choose
+R1/R2 in the built-in browser (**reads are never uploaded** — the page lists paths server-side),
+pick *resume* or *fresh*, press start, watch the 12-process ladder and the engine log stream in,
+then load the report. `bin/pipeline-clean` remains the only thing that deletes: ticking "clear
+outputs" shows its `check` plan first and runs `outputs --yes` only after confirmation, so the
+UI never becomes a second cleanup implementation.
+
+Failure is reported as failure: the panel names the process, the sample, the exit code, the work
+directory and the tail of stderr, and a run that exits 0 without writing a report is
+**failed(report_missing)**, never a green check. Cancelling sends SIGTERM to the whole process
+group (10 s, then SIGKILL) and keeps `work/`, so the run stays resumable. Killing the UI mid-run
+is survivable: the engine runs in its own session, its log is on disk, and a restarted UI
+attaches to the live run — and can still cancel it.
+
+Security is deliberately dull: bind `127.0.0.1`, a one-shot token in the printed URL, an
+`Origin` check on every API call, and no generic static-file serving. A non-loopback `--host`
+prints a warning in the terminal and a red banner in the page.
+
+Design record, HTTP contract and the measured acceptance run: [docs/ui.md](docs/ui.md).
 
 The same scripts run on every push
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)); [`tests/ci/README.md`](tests/ci/README.md)
@@ -429,7 +469,7 @@ version is declared once, in the `manifest` block of `nextflow.config`:
 ```groovy
 manifest {
     name            = 'NextFlow-WGS2GEM'
-    version         = '0.1.0'
+    version         = '0.2.0'
     nextflowVersion = '>=25.10.0'
 }
 ```

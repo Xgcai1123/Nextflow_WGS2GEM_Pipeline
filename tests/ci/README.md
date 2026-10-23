@@ -14,6 +14,7 @@ bash tests/ci/run-preview.sh
 bash tests/ci/run-disk-guard.sh
 bash tests/ci/run-stub-smoke.sh
 bash tests/ci/run-failure-isolation.sh
+bash tests/ci/run-ui-check.sh                 # local UI contract (fake engine + stub DAG)
 
 # Needs a python with `cobra` (no Nextflow, no conda):
 PYTHON=.nextflow/conda/<memote env>/bin/python3 bash tests/ci/run-growth-check.sh
@@ -33,6 +34,7 @@ assertion. They are independent and can be run in any order.
 | `run-disk-guard.sh` | The F20 disk pre-flight passes at a low floor, **aborts before any task** with a message naming the shortfall and the cleanup commands when the floor is unmet, and is fully skipped with `--min_free_disk_gb=0`. |
 | `run-stub-smoke.sh` | The complete DAG (25 tasks: 2 samples x 11 steps, plus the one aggregate growth-check task, plus MultiQC, plus one reference comparison for the single fixture sample that names a reference) runs to success with stubs, producing the full documented artifact tree — and the validated output tree at the repository root is **not modified** (the F18 regression guard: a stub run once published empty placeholders over real deliverables — and it fired again when the F26 growth check was added without redirecting its new `publishDir`). |
 | `run-failure-isolation.sh` | With one sample's **entry points** (FastQC *and* Trimmomatic — they are parallel branches, and SPAdes depends only on Trimmomatic, so poisoning one was not enough: F32) deliberately killed: the run **exits 1** (never swallowed), the failed sample produces **no downstream deliverables**, the healthy sample's finished work **survives**, and `-resume` converges while reusing that work. It also re-measures the negative control: `errorStrategy = 'ignore'` — the only strategy that would continue independent branches — exits **0** with a dead task, which is why it is rejected (design doc D12). |
+| `run-ui-check.sh` | The local web UI ([docs/ui.md](../../docs/ui.md), roadmap C) is an **operator shell, not a second pipeline**: a programmable fake engine (`fixtures/ui/fake-nextflow`) covers success / fail on demand / slow (cancel) / exit 0 without a report, and one leg runs the real `-stub-run` DAG in a temporary project copy with `ci.config`. Asserts the security boundary (no token / wrong token / evil `Origin` → 403; `HttpOnly` + `SameSite=Strict` cookie; `no-store` on every API response), seven malformed payloads each → 400 with row+field and **no spawn** (state stays idle, no run directory, no engine child), the six-column sheet byte-for-byte, the single-job 409, SSE replay byte-identical from `from=`, `done` → report bytes == file and results tarball file list == tree, `failed` → process/tag/exit_code/stderr_tail, **exit 0 without a report is failed(report_missing) rather than a green check**, cancel → process group gone + state cancelled + log kept (also for an attached run after the UI is killed and restarted, exit_code null, second cancel 409), single instance, stale pid → interrupted, and F18 (repository `results/` and `data/` untouched). Needs bash + curl + python3; only the stub leg needs Nextflow. Measured 35–47 s. Three mutation negative controls each make it fail (token check always true, noreport as done, cancel without killpg). |
 | `run-growth-check.sh` | `media/m9_aerobic.yaml` + `scripts/check_growth.py` still work: the checker passes a synthetic model whose behaviour is known by construction (growth 1.0 h⁻¹, strictly lower anaerobically, zero without a carbon source), and **three negative controls each make it exit non-zero** — an unmappable medium component (exit **2**, a configuration defect), an impossible plausibility window (exit 1), and a physical-bound violation (exit 1). It also pins the `--report-only` contract the pipeline relies on: a window violation is downgraded to 0 but still reported, while a medium/model mismatch stays fatal. Plus the committed medium's own consistency (20 compounds, provenance row `M9`, every control compound present, physical bound above the window). The real models are generated artefacts and are not in the repository, so this guards the *checker*; the models themselves are validated on every real run, where the same script is step 9 (design doc F25/F26). |
 
 ## Layout
@@ -53,6 +55,10 @@ assertion. They are independent and can be run in any order.
   0.3 s, `run-clean-check.sh` 0.4 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s,
   `run-growth-check.sh` 12 s, `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s,
   `run-preview.sh` 33 s.
+- `run-ui-check.sh` is the newest member: 237 assertions, 35–47 s. It deliberately owns **no output tree**: every
+  scenario builds a `mktemp -d` project, and the real stub leg copies the pipeline into one, so a UI regression
+  cannot publish over validated data (F18). The `SKIP` it prints when `nextflow` is absent is a skip, not a pass —
+  the new `local-ui` CI job installs Nextflow so the stub leg always runs there.
 - `run-growth-check.sh` is the **one check that is not tool-free**: it needs `cobra` to solve
   flux balance problems and `PyYAML` to read the medium definition, so its CI job runs
   `pip install cobra pyyaml` (cobra brings the GLPK solver `swiglpk`; it does **not** bring
