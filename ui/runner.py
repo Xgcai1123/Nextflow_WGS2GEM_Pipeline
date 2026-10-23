@@ -63,6 +63,18 @@ BASE_PER_SAMPLE = 11
 
 SUBMITTED_RE = re.compile(r"Submitted process > ([A-Za-z0-9_]+) \((.+?)\)\s*$")
 COMPLETED_RE = re.compile(r"Completed process > ([A-Za-z0-9_]+) \((.+?)\)\s*$")
+
+# Real Nextflow (26.10.0) prints only `Submitted process >` to stdout; task
+# COMPLETION is written to `.nextflow.log` by TaskPollingMonitor, at DEBUG:
+#   [Task monitor] DEBUG ... Task completed > TaskHandler[id: 6; name: FASTQC_RAW
+#   (SRR10194530_2); status: COMPLETED; exit: 0; error: -; workDir: ...]
+# A parser that only reads stdout therefore shows "0 completed" for the whole real
+# run -- found during the 2026-10-23 acceptance run (F48), while the fake engine
+# (which printed Completed lines itself) kept the tests green. Keep both: the
+# stdout form for the fake engine and older engines, the log form for the real one.
+TASK_COMPLETED_RE = re.compile(
+    r"Task completed > TaskHandler\[id: \d+; name: ([A-Za-z0-9_]+) \((.+?)\); "
+    r"status: (COMPLETED|FAILED|ABORTED|CACHED)")
 CACHED_RE = re.compile(r"Cached process > ([A-Za-z0-9_]+) \((.+?)\)\s*$")
 ERROR_PROCESS_RE = re.compile(r"Error executing process > '?([A-Za-z0-9_]+) \(([^)]*)\)'?")
 REPORT_RE = re.compile(r"\]\s*report\s*=\s*(/\S+?\.html)\s*$")
@@ -126,6 +138,12 @@ class LogParser:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._partial = ""
         self.bytes_consumed = 0
+        # `.nextflow.log` is a second, independent stream (engine-side completion
+        # lines); it needs its own incremental decoder so a chunk boundary in one
+        # stream cannot corrupt the other.
+        self._engine_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._engine_partial = ""
+        self.engine_bytes_consumed = 0
         self.submitted = set()      # (process, tag)
         self.completed = set()      # (process, tag)
         self.failed = set()         # (process, tag)
@@ -161,6 +179,36 @@ class LogParser:
         if self._partial:
             line, self._partial = self._partial, ""
             self._consume_line(line.rstrip("\r"))
+
+    def feed_engine_log(self, data):
+        """Incremental reader for ``.nextflow.log`` (completion status only)."""
+        if not data:
+            return
+        self.engine_bytes_consumed += len(data)
+        text = self._engine_decoder.decode(data)
+        if not text:
+            return
+        self._engine_partial += text
+        while "\n" in self._engine_partial:
+            line, self._engine_partial = self._engine_partial.split("\n", 1)
+            self._consume_engine_line(line.rstrip("\r"))
+
+    def flush_engine_log(self):
+        if self._engine_partial:
+            line, self._engine_partial = self._engine_partial, ""
+            self._consume_engine_line(line.rstrip("\r"))
+
+    def _consume_engine_line(self, line):
+        m = TASK_COMPLETED_RE.search(line)
+        if not m:
+            return
+        key = (m.group(1), m.group(2).strip())
+        self.submitted.add(key)
+        status = m.group(3)
+        if status in ("COMPLETED", "CACHED"):
+            self.completed.add(key)
+        elif status in ("FAILED", "ABORTED"):
+            self.failed.add(key)
 
     # -- line handling ----------------------------------------------------
     def _consume_line(self, line):
@@ -558,6 +606,8 @@ class RunManager(object):
         self.proc = None
         self.parser = None
         self._log_pos = 0
+        self._engine_pos = 0
+        self._engine_ino = None
         self._refs = 0
         self._stop = threading.Event()
         self._watch_thread = None
@@ -628,6 +678,8 @@ class RunManager(object):
         run = self.run
         self.parser = LogParser()
         self._log_pos = 0
+        self._engine_pos = 0
+        self._engine_ino = None
         self._refs = sheet.read_refs(run.get("sheet") or "")
         if not run.get("samples"):
             run["samples"] = sheet.samples_from_sheet(run.get("sheet") or "")
@@ -650,6 +702,49 @@ class RunManager(object):
             self.parser.flush()
         except OSError:
             pass
+        self._replay_engine_log_locked()
+
+    def _replay_engine_log_locked(self):
+        """Read `.nextflow.log` from the beginning (attach / terminal restore)."""
+        path = os.path.join(self.project, ".nextflow.log")
+        try:
+            size = os.path.getsize(path)
+            ino = os.stat(path).st_ino
+        except OSError:
+            return
+        try:
+            with open(path, "rb") as fh:
+                while True:
+                    chunk = fh.read(262144)
+                    if not chunk:
+                        break
+                    self.parser.feed_engine_log(chunk)
+                    self._engine_pos += len(chunk)
+            self.parser.flush_engine_log()
+            self._engine_ino = ino
+        except OSError:
+            pass
+
+    def _refresh_engine_log_locked(self):
+        """Tail `.nextflow.log`; reset on rotation (nextflow moves it to .1)."""
+        path = os.path.join(self.project, ".nextflow.log")
+        try:
+            st = os.stat(path)
+        except OSError:
+            return
+        if self._engine_ino != st.st_ino or st.st_size < self._engine_pos:
+            self._engine_pos = 0
+            self._engine_ino = st.st_ino
+        if st.st_size > self._engine_pos:
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(self._engine_pos)
+                    data = fh.read(st.st_size - self._engine_pos)
+            except OSError:
+                return
+            if data:
+                self.parser.feed_engine_log(data)
+                self._engine_pos += len(data)
 
     def _attach_locked(self):
         run = self.run
@@ -769,6 +864,17 @@ class RunManager(object):
         if size < self._log_pos:      # should not happen: run.log is append-only
             self._log_pos = 0
             self.parser = LogParser()
+            # A fresh run must not inherit the previous run's completion lines.
+            # Start at the current end of .nextflow.log; when nextflow rotates it
+            # (inode changes, size drops) the tailer resets to 0 and reads the new
+            # file from its beginning.
+            engine_log = os.path.join(self.project, ".nextflow.log")
+            try:
+                self._engine_pos = os.path.getsize(engine_log)
+                self._engine_ino = os.stat(engine_log).st_ino
+            except OSError:
+                self._engine_pos = 0
+                self._engine_ino = None
         if size > self._log_pos:
             try:
                 with open(log, "rb") as fh:
@@ -779,6 +885,7 @@ class RunManager(object):
             if data:
                 self.parser.feed(data)
                 self._log_pos += len(data)
+        self._refresh_engine_log_locked()
         run["log_bytes"] = max(size, self._log_pos)
         self._apply_progress_locked()
 
