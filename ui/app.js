@@ -10,15 +10,15 @@
   /* ------------------------------------------------------------- constants */
 
   var STATUS = {
-    idle: { label: '空闲', cls: 'badge-idle' },
-    running: { label: '运行中', cls: 'badge-running' },
-    done: { label: '已完成', cls: 'badge-done' },
-    failed: { label: '失败', cls: 'badge-failed' },
-    cancelled: { label: '已取消', cls: 'badge-cancelled' },
-    interrupted: { label: '已中断', cls: 'badge-interrupted' }
+    idle: { label: 'Idle', cls: 'badge-idle' },
+    running: { label: 'Running', cls: 'badge-running' },
+    done: { label: 'Done', cls: 'badge-done' },
+    failed: { label: 'Failed', cls: 'badge-failed' },
+    cancelled: { label: 'Cancelled', cls: 'badge-cancelled' },
+    interrupted: { label: 'Interrupted', cls: 'badge-interrupted' }
   };
 
-  var MODE_LABEL = { resume: '续跑（-resume）', fresh: '全新运行' };
+  var MODE_LABEL = { resume: 'Resume (-resume)', fresh: 'Fresh run' };
 
   /* Pipeline order (12 processes). The backend reports `steps[].process`; the
    * order is display-only so a run's ladder always has the same shape. */
@@ -40,6 +40,16 @@
   var MAX_LOG_LINES = 20000;
   var LOG_ERR_RE = /ERROR|Caused by|FAIL/;
   var SAMPLE_RE = /^[A-Za-z0-9._-]+$/;
+
+  /* Refresh fallbacks. SSE is the primary channel, but the UI must keep telling
+   * the truth when that single long connection stalls or dies: poll the state
+   * endpoint while the tab is visible, re-fetch once after a terminal
+   * transition (report/exit_code can lag the SSE snapshot), and reconnect the
+   * stream when it has been silent for too long. */
+  var TERMINAL_STATES = { done: true, failed: true, cancelled: true, interrupted: true };
+  var STATE_POLL_MS = 5000;
+  var TERMINAL_REFETCH_MS = 600;
+  var SSE_WATCHDOG_MS = 45000;
 
   var TOKEN = '';
   try {
@@ -121,7 +131,7 @@
   function fmtClock(epoch) {
     if (!epoch) return '—';
     try {
-      return new Date(epoch * 1000).toLocaleString('zh-CN', { hour12: false });
+      return new Date(epoch * 1000).toLocaleString('en-US', { hour12: false });
     } catch (e) {
       return new Date(epoch * 1000).toLocaleString();
     }
@@ -172,7 +182,12 @@
     draftSaveTimer: null,
     reportFrameUrl: null,
     modal: null,
-    authFailed: false
+    authFailed: false,
+    lastStateAt: 0,
+    pollTimer: null,
+    stateFetch: null,
+    terminalRefreshTimer: null,
+    watchdogTimer: null
   };
 
   /* ---------------------------------------------------------------- draft */
@@ -268,7 +283,7 @@
         return data;
       });
     }, function () {
-      throw { status: 0, body: null, message: '无法连接本地服务（页面可能不是由 bin/pipeline-ui 打开）' };
+      throw { status: 0, body: null, message: 'Cannot reach the local server (this page may not be served by bin/pipeline-ui)' };
     });
   }
 
@@ -304,21 +319,21 @@
 
     var project = projectPath();
     dom.projectPath.textContent = project || '—';
-    dom.projectPath.title = project || '后端未在 /api/state 的 server 字段中提供项目路径';
+    dom.projectPath.title = project || 'The backend did not report the project root in the /api/state server field';
 
     var server = app.server || {};
     var port = server.port;
     var version = server.version || server.app_version || nextflowVersion();
-    dom.serverMeta.textContent = '端口 ' + num(port) + ' · '
-      + (version ? 'Nextflow ' + String(version) : '版本 —');
+    dom.serverMeta.textContent = 'Port ' + num(port) + ' · '
+      + (version ? 'Nextflow ' + String(version) : 'version —');
 
     var host = server.host || server.bind || '';
     var loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].indexOf(String(host)) >= 0;
     var lan = server.non_loopback === true || server.lan === true || (host && !loopback);
     if (lan) {
       dom.lanBanner.hidden = false;
-      dom.lanBanner.textContent = '警告：服务监听在非回环地址（' + host + '），同一局域网内的其他机器可能访问本页面。'
-        + '本 UI 定位是本地单用户；建议只用 127.0.0.1 启动。';
+      dom.lanBanner.textContent = 'Warning: the server is listening on a non-loopback address (' + host + '); other machines on the same LAN may be able to open this page. '
+        + 'This UI is meant for a single local user; start it on 127.0.0.1.';
     } else {
       dom.lanBanner.hidden = true;
       dom.lanBanner.textContent = '';
@@ -326,7 +341,7 @@
   }
 
   function setConn(connected) {
-    dom.connBadge.textContent = connected ? '日志流已连接' : '日志流未连接';
+    dom.connBadge.textContent = connected ? 'Log stream connected' : 'Log stream disconnected';
     dom.connBadge.className = 'conn ' + (connected ? 'conn-on' : 'conn-off');
   }
 
@@ -362,8 +377,8 @@
     input.value = value || '';
     var browse = el('button', {
       class: 'btn btn-small',
-      attrs: { type: 'button', 'data-act': 'browse', 'data-field': field, 'aria-label': '浏览 ' + label },
-      text: '浏览'
+      attrs: { type: 'button', 'data-act': 'browse', 'data-field': field, 'aria-label': 'Browse ' + label },
+      text: 'Browse'
     });
     return el('label', { class: 'field' }, [
       el('span', { class: 'field-label', text: label }),
@@ -375,27 +390,27 @@
     var number = index + 1;
     var card = el('div', {
       class: 'sample-card',
-      attrs: { 'data-idx': String(index), 'aria-label': '样本 ' + number }
+      attrs: { 'data-idx': String(index), 'aria-label': 'Sample ' + number }
     });
     card.appendChild(el('div', { class: 'sample-card-head' }, [
-      el('span', { class: 'sample-idx', text: '样本 ' + number }),
+      el('span', { class: 'sample-idx', text: 'Sample ' + number }),
       el('button', {
         class: 'btn-remove',
         attrs: {
           type: 'button', 'data-act': 'remove', 'data-idx': String(index),
-          title: '删除样本 ' + number, 'aria-label': '删除样本 ' + number
+          title: 'Remove sample ' + number, 'aria-label': 'Remove sample ' + number
         },
         text: '✕'
       })
     ]));
-    card.appendChild(sampleField('样本名', 'name', sample.name, '例如 SRR1770413'));
-    card.appendChild(sampleFieldWithBrowse('R1', 'fq1', sample.fq1, '服务端绝对路径，例如 /…/x_1.fastq.gz'));
-    card.appendChild(sampleFieldWithBrowse('R2', 'fq2', sample.fq2, '服务端绝对路径'));
+    card.appendChild(sampleField('Sample name', 'name', sample.name, 'e.g. SRR1770413'));
+    card.appendChild(sampleFieldWithBrowse('R1', 'fq1', sample.fq1, 'Server absolute path, e.g. /…/x_1.fastq.gz'));
+    card.appendChild(sampleFieldWithBrowse('R2', 'fq2', sample.fq2, 'Server absolute path'));
     card.appendChild(el('div', { class: 'sample-grid-2' }, [
-      sampleField('物种', 'species', sample.species, '例如 Escherichia coli'),
-      sampleField('菌株', 'strain', sample.strain, '例如 K-12')
+      sampleField('Species', 'species', sample.species, 'e.g. Escherichia coli'),
+      sampleField('Strain', 'strain', sample.strain, 'e.g. K-12')
     ]));
-    card.appendChild(sampleFieldWithBrowse('参考', 'reference', sample.reference, '可选：FASTA 绝对路径'));
+    card.appendChild(sampleFieldWithBrowse('Reference', 'reference', sample.reference, 'Optional: absolute FASTA path'));
     card.appendChild(el('p', { class: 'field-error sample-error', props: { hidden: true } }));
     return card;
   }
@@ -443,9 +458,9 @@
     dom.btnAddSample.disabled = locked;
     dom.sampleList.classList.toggle('is-locked', locked);
     dom.btnRun.disabled = locked || app.startBusy || app.draft.samples.length === 0;
-    dom.btnRun.textContent = app.startBusy ? '提交中…' : '开始运行';
+    dom.btnRun.textContent = app.startBusy ? 'Starting…' : 'Start run';
     dom.btnCancel.disabled = !locked;
-    dom.btnCancel.title = locked ? '取消当前运行（需二次确认）' : '只有本 UI 启动的运行可以取消';
+    dom.btnCancel.title = locked ? 'Cancel the current run (asks for confirmation)' : 'Only a run started by this UI can be cancelled';
   }
 
   /* --------------------------------------------------------------- options */
@@ -473,8 +488,8 @@
     if (plan && plan.text) {
       dom.cleanPlanText.textContent = plan.text;
     } else {
-      dom.cleanPlanText.textContent = '（尚无预检结果或后端未返回清单。点击顶栏「预检」显示将删清单；'
-        + '运行前仍会执行 bin/pipeline-clean outputs --yes 并要求二次确认。）';
+      dom.cleanPlanText.textContent = '(No preflight result yet, or the backend returned no plan. Click “Preflight” '
+        + 'in the top bar to show the deletion list; a run will still execute bin/pipeline-clean outputs --yes and ask for confirmation.)';
     }
   }
 
@@ -495,9 +510,9 @@
   function setPreflightBusy(busy) {
     app.preflightBusy = busy;
     dom.btnPreflight.disabled = busy;
-    dom.btnPreflight.textContent = busy ? '预检中…' : '预检';
+    dom.btnPreflight.textContent = busy ? 'Checking…' : 'Preflight';
     dom.btnPreflight2.disabled = busy;
-    dom.btnPreflight2.textContent = busy ? '预检中…' : '重新预检';
+    dom.btnPreflight2.textContent = busy ? 'Checking…' : 'Re-run preflight';
   }
 
   function loadPreflight(initial) {
@@ -513,8 +528,8 @@
       return data;
     }).catch(function (err) {
       if (err.status === 403) return;
-      toast('预检失败：' + (err.message || '未知错误'), 'error');
-      dom.preflightSummary.textContent = '预检失败';
+      toast('Preflight failed: ' + (err.message || 'unknown error'), 'error');
+      dom.preflightSummary.textContent = 'Preflight failed';
     }).then(function () {
       setPreflightBusy(false);
     });
@@ -526,11 +541,11 @@
     if (!data || !Array.isArray(data.checks)) {
       dom.preflightList.appendChild(el('li', { class: 'check-item status-unknown' }, [
         el('span', { class: 'check-icon', text: '·' }),
-        el('span', { class: 'check-label', text: '尚未预检' }),
-        el('span', { class: 'check-detail', text: '点击「预检」检查本机环境（约 1–3 秒）' })
+        el('span', { class: 'check-label', text: 'Not checked yet' }),
+        el('span', { class: 'check-detail', text: 'Click “Preflight” to check the local environment (about 1-3 s)' })
       ]));
-      dom.preflightSummary.textContent = '尚未预检';
-      dom.preflightFoot.textContent = '预检只提示，不代替管线裁决：预检通过不代表管线一定会成功。';
+      dom.preflightSummary.textContent = 'Not checked yet';
+      dom.preflightFoot.textContent = 'Preflight is advisory only: a passing preflight does not guarantee the pipeline will succeed.';
       return;
     }
 
@@ -552,23 +567,23 @@
     var failures = summary.failures || 0;
     var warnings = summary.warnings || 0;
     var summaryText;
-    if (failures > 0) summaryText = '✗ ' + failures + ' 项失败 · ⚠ ' + warnings + ' 项警告';
-    else if (warnings > 0) summaryText = '✓ 可以运行 · ⚠ ' + warnings + ' 项警告';
-    else summaryText = '✓ 全部通过';
+    if (failures > 0) summaryText = '✗ ' + failures + ' failed · ⚠ ' + warnings + ' warning(s)';
+    else if (warnings > 0) summaryText = '✓ Ready to run · ⚠ ' + warnings + ' warning(s)';
+    else summaryText = '✓ All checks passed';
     dom.preflightSummary.textContent = summaryText;
 
     var config = data.config || {};
     var foot = [];
     if (config.source === 'fallback') {
-      foot.push('配置解析失败，已使用内置默认路径（source=fallback），报告定位可能不准。');
+      foot.push('Config parsing failed; built-in default paths are used (source=fallback), so report discovery may be inaccurate.');
     } else if (config.source) {
-      foot.push('配置来源：' + config.source + '。');
+      foot.push('Config source: ' + config.source + '。');
     }
     var disk = data.disk || {};
     if (disk.free_gb !== undefined && disk.free_gb !== null) {
-      foot.push('可用磁盘 ' + disk.free_gb + ' GiB（需 ≥' + num(disk.required_gb) + ' GiB）。');
+      foot.push('Free disk ' + disk.free_gb + ' GiB (requires ≥' + num(disk.required_gb) + ' GiB).');
     }
-    foot.push('预检只提示，不代替管线裁决：预检通过不代表管线一定会成功。');
+    foot.push('Preflight is advisory only: a passing preflight does not guarantee the pipeline will succeed.');
     dom.preflightFoot.textContent = foot.join(' ');
   }
 
@@ -578,7 +593,7 @@
     if (app.run && Array.isArray(app.run.samples) && app.run.samples.length) return app.run.samples.slice();
     var names = app.draft.samples.map(function (sample, index) {
       var name = (sample.name || '').trim();
-      return name || ('样本 ' + (index + 1));
+      return name || ('Sample ' + (index + 1));
     });
     return names;
   }
@@ -607,7 +622,7 @@
     samples.forEach(function (name) {
       headRow.appendChild(el('th', { class: 'col-sample', attrs: { scope: 'col', title: name }, text: name }));
     });
-    headRow.appendChild(el('th', { class: 'col-count', attrs: { scope: 'col' }, text: '完成/期望' }));
+    headRow.appendChild(el('th', { class: 'col-count', attrs: { scope: 'col' }, text: 'Done/Expected' }));
     head.appendChild(headRow);
 
     var seen = {};
@@ -642,7 +657,7 @@
         }
         row.appendChild(el('td', {
           class: aggregateClass,
-          attrs: { colspan: String(samples.length), title: processName + ' 是全队列聚合任务，不是每个样本一个任务' },
+          attrs: { colspan: String(samples.length), title: processName + ' is a cohort-wide aggregate task, not one task per sample' },
           text: aggregateText
         }));
       } else {
@@ -657,7 +672,7 @@
           var cellText = '—';
           var title = processName + ' / ' + sampleName;
           if (optionalDone && !count) {
-            title += '：该样本未提供参考（ASSEMBLY_REF 是可选任务）';
+            title += ': no reference for this sample (ASSEMBLY_REF is optional)';
           } else if (count !== null && count !== undefined) {
             if (perSampleExpected && count >= perSampleExpected) {
               cellClass = 'cell cell-done';
@@ -672,9 +687,9 @@
               cellClass = 'cell cell-empty';
               cellText = '·';
             }
-            title += '：' + count + ' 个任务完成' + (perSampleExpected ? '（期望 ' + perSampleExpected + '）' : '');
+            title += ': ' + count + ' task(s) completed' + (perSampleExpected ? ' (expected ' + perSampleExpected + ')' : '');
           } else {
-            title += '：尚无进度数据';
+            title += ': no progress data yet';
           }
           row.appendChild(el('td', { class: cellClass, attrs: { title: title }, text: cellText }));
         });
@@ -688,11 +703,11 @@
     });
 
     var expected = app.run && app.run.tasks ? app.run.tasks.expected : null;
-    dom.ladderHint.textContent = '12 process · 每样本 11 个任务 · 每参考 +1'
-      + (expected !== null && expected !== undefined ? ' · 本次期望 ' + expected + ' 个任务' : '');
-    dom.ladderHint.title = '期望任务数 = 11×N + 参考数 + 2：FASTQC_RAW×2、FASTQC_TRIMMED×2，'
-      + 'TRIMMOMATIC/SPADES/QUAST/BUSCO/BAKTA/CARVEME/MEMOTE 各 1，每参考 ASSEMBLY_REF 1，'
-      + 'GROWTH_CHECK 与 MULTIQC 各 1（聚合任务）。';
+    dom.ladderHint.textContent = '12 processes · 11 tasks per sample · +1 per reference'
+      + (expected !== null && expected !== undefined ? ' · ' + expected + ' tasks expected this run' : '');
+    dom.ladderHint.title = 'Expected tasks = 11×N + references + 2: FASTQC_RAW×2 and FASTQC_TRIMMED×2, '
+      + 'one each of TRIMMOMATIC/SPADES/QUAST/BUSCO/BAKTA/CARVEME/MEMOTE, one ASSEMBLY_REF per reference, '
+      + 'and one each of GROWTH_CHECK and MULTIQC (aggregate tasks).';
   }
 
   /* --------------------------------------------------------------- counters */
@@ -705,21 +720,91 @@
     applyLock();
   }
 
+  /* --------------------------------------------------------------- progress */
+
+  /* One glanceable model for the overall progress bar: percentage from the
+   * task counters, the stage that is running right now, and a terminal colour.
+   * The 12-stage ladder and the four counters stay as the detailed view. */
+  function progressModel() {
+    var model = {
+      state: 'idle',
+      pct: 0,
+      caption: 'No run yet',
+      stage: 'Waiting for the engine…',
+      cls: 'is-idle'
+    };
+    var run = app.run;
+    if (!run) return model;
+
+    var state = run.state || 'idle';
+    var tasks = run.tasks || {};
+    var completed = Number(tasks.completed) || 0;
+    var expected = Number(tasks.expected) || 0;
+    var submitted = Number(tasks.submitted) || 0;
+    var failed = Number(tasks.failed) || 0;
+    var running = Math.max(0, submitted - completed - failed);
+    var pct = expected > 0 ? Math.round((completed / expected) * 100) : 0;
+    pct = Math.max(0, Math.min(100, pct));
+    if (state === 'done') pct = 100;
+
+    var runningSteps = [];
+    var failedStep = null;
+    (Array.isArray(run.steps) ? run.steps : []).forEach(function (step) {
+      if (!step || !step.process) return;
+      if (!failedStep && step.failed > 0) failedStep = step.process;
+      if (step.running > 0) runningSteps.push(step.process);
+    });
+
+    var parts = [completed + ' / ' + expected + ' tasks', pct + '%'];
+    if (running > 0) parts.push(running + ' running');
+    if (failed > 0) parts.push(failed + ' failed');
+    if (state === 'done') parts.push('complete');
+    else if (state === 'failed') parts.push(failedStep ? 'failed at ' + failedStep : 'failed');
+    else if (state === 'cancelled') parts.push('cancelled');
+    else if (state === 'interrupted') parts.push('interrupted');
+
+    model.state = state;
+    model.pct = pct;
+    model.caption = parts.join(' · ');
+    if (state === 'running') model.cls = 'is-running';
+    else if (TERMINAL_STATES[state]) model.cls = 'is-' + state;
+    else model.cls = 'is-idle';
+
+    if (state === 'done') model.stage = 'Finished';
+    else if (state === 'failed') model.stage = failedStep ? 'Failed at ' + failedStep : 'Failed';
+    else if (state === 'cancelled' || state === 'interrupted') model.stage = 'Stopped';
+    else if (runningSteps.length) model.stage = runningSteps.join(' · ');
+    else model.stage = 'Waiting for the engine…';
+    return model;
+  }
+
+  function renderProgress() {
+    if (!dom.overallProgress || !dom.progressFill) return;
+    var model = progressModel();
+    dom.overallProgress.setAttribute('aria-valuenow', String(model.pct));
+    dom.overallProgress.setAttribute('aria-valuetext', model.caption);
+    dom.overallProgress.className = 'progress ' + model.cls;
+    dom.progressFill.style.width = model.pct + '%';
+    dom.progressPct.textContent = app.run ? model.pct + '%' : '—';
+    dom.progressCaption.textContent = model.caption;
+    dom.currentStage.textContent = model.stage;
+  }
+
   function runMetaText() {
     var run = app.run;
-    if (!run) return '尚未运行';
+    if (!run) return 'No run yet';
     var parts = [];
     var info = STATUS[run.state] || STATUS.idle;
     parts.push(info.label);
     if (run.id) parts.push('#' + run.id);
     if (run.mode) parts.push(MODE_LABEL[run.mode] || run.mode);
     if (run.state === 'running' && run.started_at) {
-      parts.push('已用时 ' + fmtDuration(Date.now() / 1000 - Number(run.started_at)));
+      parts.push('elapsed ' + fmtDuration(Date.now() / 1000 - Number(run.started_at)));
     } else if (run.elapsed_seconds !== null && run.elapsed_seconds !== undefined) {
-      parts.push('用时 ' + fmtDuration(run.elapsed_seconds));
+      parts.push('took ' + fmtDuration(run.elapsed_seconds));
     }
     if (run.exit_code !== null && run.exit_code !== undefined) parts.push('exit ' + run.exit_code);
-    if (run.cancel_requested) parts.push('已请求取消');
+    if (run.cancel_requested) parts.push('cancel requested');
     return parts.join(' · ');
   }
 
@@ -731,7 +816,7 @@
       dom.countCompleted.textContent = '—';
       dom.countFailed.textContent = '—';
       dom.countExpected.textContent = '—';
-      dom.actionHint.textContent = app.preflight ? '填好样本后开始运行。' : '建议先点「预检」。';
+      dom.actionHint.textContent = app.preflight ? 'Fill in the samples, then start the run.' : 'Tip: run the preflight check first.';
     } else {
       dom.runMeta.textContent = runMetaText();
 
@@ -741,20 +826,21 @@
       dom.countFailed.textContent = countValue(tasks.failed);
       dom.countExpected.textContent = countValue(tasks.expected);
 
-      if (run.state === 'running') dom.actionHint.textContent = '运行中：表单已锁定，日志实时追加；取消需要二次确认。';
-      else if (run.state === 'done') dom.actionHint.textContent = '已完成：右侧可懒加载报告或下载产物。';
-      else if (run.state === 'failed') dom.actionHint.textContent = '运行失败：在上方失败面板查看步骤 / 样本 / exit code / stderr 尾。';
-      else if (run.state === 'cancelled') dom.actionHint.textContent = '已取消：work/ 保留，可切换续跑后重新开始。';
-      else if (run.state === 'interrupted') dom.actionHint.textContent = '已中断：进程已不在，可用「续跑重试」以 -resume 继续。';
+      if (run.state === 'running') dom.actionHint.textContent = 'Running: the form is locked and the log streams live; cancelling asks for confirmation.';
+      else if (run.state === 'done') dom.actionHint.textContent = 'Done: load the report lazily or download artifacts on the right.';
+      else if (run.state === 'failed') dom.actionHint.textContent = 'Run failed: see the failure panel above for step / sample / exit code / stderr tail.';
+      else if (run.state === 'cancelled') dom.actionHint.textContent = 'Cancelled: work/ is kept; switch to resume and start again.';
+      else if (run.state === 'interrupted') dom.actionHint.textContent = 'Interrupted: the process is gone; use “Retry with -resume” to continue.';
       else dom.actionHint.textContent = '';
     }
     syncRunButtons();
     renderLadder();
+    renderProgress();
   }
 
-  function tickElapsed() {
-    if (!app.run || app.run.state !== 'running') return;
-    dom.runMeta.textContent = runMetaText();
+  function tickSecond() {
+    if (app.run && app.run.state === 'running') dom.runMeta.textContent = runMetaText();
+    renderStateUpdated();
   }
 
   /* ---------------------------------------------------------------- notice */
@@ -766,9 +852,9 @@
     var show = false;
     if (run && run.state === 'cancelled') {
       box.className = 'notice notice-warn';
-      box.appendChild(el('strong', { text: '已取消（cancelled）' }));
+      box.appendChild(el('strong', { text: 'Cancelled' }));
       box.appendChild(el('p', {
-        text: '进程组已终止；work/ 与 results/ 保留。切换「续跑」后再运行会复用已完成的任务。'
+        text: 'The process group was terminated; work/ and results/ are kept. Switch to “Resume” and run again to reuse completed tasks.'
       }));
       show = true;
     }
@@ -799,19 +885,19 @@
     var title;
     var message;
     if (state === 'interrupted') {
-      title = '运行中断（interrupted）';
+      title = 'Run interrupted';
       message = run.message || failed.message
-        || '上次运行在 UI 退出后结束或被杀，进程已经不在了。请用「续跑重试」以 -resume 收敛。';
+        || 'The previous run ended after the UI exited or was killed; the process is gone. Use “Retry with -resume” to converge.';
     } else if (reason === 'report_missing') {
-      title = '跑完了，但没找到报告';
-      message = '进程退出码为 0，但报告定位失败（日志 report 行、配置目录、results/report glob 都没命中）。'
-        + '按契约这判定为 failed，不是 done——不会显示绿勾。';
+      title = 'Run finished, but no report was found';
+      message = 'The process exited with code 0, but report discovery failed (no match from the log report line, the configured directory, or the results/report glob). '
+        + 'Per the contract this is failed, not done, so no green check is shown.';
     } else if (reason === 'clean_failed') {
-      title = '清空产物失败，未启动 nextflow';
-      message = failed.message || 'bin/pipeline-clean outputs --yes 非零退出，管线没有启动。';
+      title = 'Clean failed; nextflow was not started';
+      message = failed.message || 'bin/pipeline-clean outputs --yes exited non-zero, so the pipeline was not started.';
     } else {
-      title = '运行失败';
-      message = failed.message || '管线以非零退出码失败。';
+      title = 'Run failed';
+      message = failed.message || 'The pipeline failed with a non-zero exit code.';
     }
 
     box.appendChild(el('div', { class: 'panel-head' }, [
@@ -828,17 +914,17 @@
       else if (valueNode) dd.appendChild(valueNode);
       kv.appendChild(dd);
     }
-    addRow('步骤', failed.process ? el('code', { text: failed.process }) : '—');
-    addRow('样本', failed.tag ? el('code', { text: failed.tag }) : '—');
+    addRow('Step', failed.process ? el('code', { text: failed.process }) : '—');
+    addRow('Sample', failed.tag ? el('code', { text: failed.tag }) : '—');
     var exitVal = failed.exit_code === null || failed.exit_code === undefined ? '—' : String(failed.exit_code);
     addRow('exit code', el('span', { class: 'bad-num', text: exitVal }));
-    addRow('原因', reason);
-    addRow('work 目录', failed.work_dir ? el('code', { text: failed.work_dir }) : '—');
+    addRow('Reason', reason);
+    addRow('Work directory', failed.work_dir ? el('code', { text: failed.work_dir }) : '—');
     box.appendChild(kv);
 
     if (failed.stderr_tail) {
       var details = el('details', { class: 'stderr-details', props: { open: true } }, [
-        el('summary', { text: 'stderr 尾（最后 40 行）' }),
+        el('summary', { text: 'stderr tail (last 40 lines)' }),
         el('pre', { text: failed.stderr_tail })
       ]);
       box.appendChild(details);
@@ -848,7 +934,7 @@
       el('button', {
         class: 'btn btn-primary',
         attrs: { type: 'button' },
-        text: '续跑重试（-resume）',
+        text: 'Retry with -resume',
         on: { click: retryWithResume }
       })
     ]);
@@ -856,7 +942,7 @@
       actions.appendChild(el('button', {
         class: 'btn',
         attrs: { type: 'button' },
-        text: '复制 work 目录',
+        text: 'Copy work directory',
         on: {
           click: function () { copyText(failed.work_dir); }
         }
@@ -893,13 +979,13 @@
     else if (app.preflight && app.preflight.existing && app.preflight.existing.results_bytes) hasResults = true;
 
     /* ---- report panel ---- */
-    var stateText = '尚未运行';
-    if (run && run.state === 'running') stateText = report ? '运行中（上次报告）' : '运行中（完成后可加载）';
-    else if (run && run.state === 'done') stateText = report ? '已完成' : '已完成但报告缺失';
-    else if (run && run.state === 'failed') stateText = report ? '失败（保留旧报告）' : '失败，未生成报告';
-    else if (run && run.state === 'cancelled') stateText = '已取消';
-    else if (run && run.state === 'interrupted') stateText = '已中断';
-    else if (report) stateText = '上次运行的报告';
+    var stateText = 'No run yet';
+    if (run && run.state === 'running') stateText = report ? 'Running (previous report)' : 'Running (loadable when done)';
+    else if (run && run.state === 'done') stateText = report ? 'Done' : 'Done, but the report is missing';
+    else if (run && run.state === 'failed') stateText = report ? 'Failed (previous report kept)' : 'Failed; no report produced';
+    else if (run && run.state === 'cancelled') stateText = 'Cancelled';
+    else if (run && run.state === 'interrupted') stateText = 'Interrupted';
+    else if (report) stateText = 'Report from the previous run';
     dom.reportState.textContent = stateText;
 
     dom.reportPath.textContent = report && report.path ? report.path : '—';
@@ -909,7 +995,7 @@
 
     var canLoad = !!report;
     dom.btnLoadReport.disabled = !canLoad;
-    dom.btnLoadReport.textContent = app.reportFrameUrl ? '重新加载报告（约 15 MB）' : '加载报告（约 15 MB）';
+    dom.btnLoadReport.textContent = app.reportFrameUrl ? 'Reload report (~15 MB)' : 'Load report (~15 MB)';
     dom.btnDownloadReport.disabled = !canLoad;
     setAnchorEnabled(dom.linkOpenReport, canLoad);
     setAnchorEnabled(dom.linkDownloadResults, hasResults || canLoad);
@@ -920,11 +1006,11 @@
     dom.linkDownloadResults.href = withToken('/api/download?what=results');
 
     if (!report) {
-      dom.reportHint.textContent = '报告是自包含单文件 MultiQC 页面（约 15 MB）。为节省首屏流量，iframe 只在点击后加载。';
+      dom.reportHint.textContent = 'The report is a self-contained single-file MultiQC page (~15 MB). To save initial bandwidth the iframe loads only after a click.';
     } else if (current.source === 'history') {
-      dom.reportHint.textContent = '当前运行没有报告；显示的是上次运行遗留的报告（来自 /api/preflight 的 existing.report）。';
+      dom.reportHint.textContent = 'The current run has no report; this is the leftover report from the previous run (existing.report from /api/preflight).';
     } else {
-      dom.reportHint.textContent = '报告是自包含单文件 MultiQC 页面。加载后可在下方 iframe 内交互，也可在新标签打开。';
+      dom.reportHint.textContent = 'The report is a self-contained single-file MultiQC page. Once loaded you can interact with it in the iframe below, or open it in a new tab.';
     }
 
     if (app.reportFrameUrl && (!report || app.reportFrameUrl !== reportUrl)) {
@@ -971,14 +1057,14 @@
     app.reportFrameUrl = url;
     dom.reportFrame.src = url;
     dom.reportFrameWrap.hidden = false;
-    dom.btnLoadReport.textContent = '重新加载报告（约 15 MB）';
+    dom.btnLoadReport.textContent = 'Reload report (~15 MB)';
   }
 
   function unloadReportFrame() {
     app.reportFrameUrl = null;
     dom.reportFrame.removeAttribute('src');
     dom.reportFrameWrap.hidden = true;
-    dom.btnLoadReport.textContent = '加载报告（约 15 MB）';
+    dom.btnLoadReport.textContent = 'Load report (~15 MB)';
   }
 
   function triggerDownload(url) {
@@ -1089,11 +1175,11 @@
     var total = app.logLines.length;
     var shown = app.logFilter ? app.logLines.filter(logMatches).length : total;
     dom.logMeta.textContent = app.run
-      ? '共 ' + total + ' 行 · 已读 ' + fmtBytes(app.logOffset)
-      : (total ? '共 ' + total + ' 行' : '等待运行');
+      ? total + ' lines · ' + fmtBytes(app.logOffset) + ' read'
+      : (total ? total + ' lines' : 'Waiting for a run');
     dom.logCount.textContent = app.logFilter
-      ? '匹配 ' + shown + ' / 共 ' + total + ' 行'
-      : total + ' 行（上限 ' + MAX_LOG_LINES + '）';
+      ? shown + ' / ' + total + ' lines match'
+      : total + ' lines (cap ' + MAX_LOG_LINES + ')';
   }
 
   function resetLogStream() {
@@ -1103,18 +1189,18 @@
     app.logRendered = 0;
     app.logHasContent = false;
     clear(dom.log);
-    dom.log.appendChild(el('span', { class: 'log-placeholder', text: '等待运行日志…' }));
+    dom.log.appendChild(el('span', { class: 'log-placeholder', text: 'Waiting for the run log…' }));
     updateLogMeta();
   }
 
   function copyText(text) {
     if (!text || text === '—') {
-      toast('没有可复制的内容', 'error');
+      toast('Nothing to copy', 'error');
       return;
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () {
-        toast('已复制', 'ok');
+        toast('Copied', 'ok');
       }, function () {
         fallbackCopy(text);
       });
@@ -1134,7 +1220,7 @@
     var ok = false;
     try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
     document.body.removeChild(area);
-    toast(ok ? '已复制' : '复制失败，请手动选择文本', ok ? 'ok' : 'error');
+    toast(ok ? 'Copied' : 'Copy failed, please select the text manually', ok ? 'ok' : 'error');
   }
 
   function copyLog() {
@@ -1158,12 +1244,21 @@
       unloadReportFrame();
       if (app.sse) connectSSE();
     }
+    var previousState = app.run && app.run.state ? app.run.state : null;
     app.lastRunId = newId;
     app.run = run;
+    app.lastStateAt = Date.now();
 
     if (run && run.mode && !app.draft.modeTouched) {
       app.draft.mode = run.mode;
       saveDraftSoon();
+    }
+
+    /* The SSE snapshot can arrive before report discovery and exit_code are
+     * recorded, so pull the authoritative state once more after a terminal
+     * transition (source is informational only). */
+    if (run && TERMINAL_STATES[run.state] && previousState !== run.state) {
+      scheduleTerminalRefetch();
     }
 
     renderStatus();
@@ -1173,14 +1268,90 @@
     renderFailure();
     renderResults();
     updateLogMeta();
+    renderStateUpdated();
+  }
+
+  /* ------------------------------------------------------ state fallbacks */
+
+  /* Polling is the second, independent channel: SSE alone must never be the
+   * reason the Run panel goes stale once a long run ends. */
+  function pollState() {
+    if (app.authFailed) return;
+    if (document.visibilityState === 'hidden') return;
+    refreshState().catch(function () { /* the next poll or the SSE retries */ });
+  }
+
+  function startStatePolling() {
+    if (app.pollTimer) return;
+    app.pollTimer = window.setInterval(pollState, STATE_POLL_MS);
+  }
+
+  function stopStatePolling() {
+    if (!app.pollTimer) return;
+    window.clearInterval(app.pollTimer);
+    app.pollTimer = null;
+  }
+
+  function scheduleTerminalRefetch() {
+    if (app.terminalRefreshTimer) window.clearTimeout(app.terminalRefreshTimer);
+    app.terminalRefreshTimer = window.setTimeout(function () {
+      app.terminalRefreshTimer = null;
+      refreshState().catch(function () { /* best effort */ });
+    }, TERMINAL_REFETCH_MS);
+  }
+
+  function renderStateUpdated() {
+    if (!dom.stateUpdated) return;
+    if (!app.lastStateAt) {
+      dom.stateUpdated.textContent = 'state updated —';
+      return;
+    }
+    var seconds = Math.max(0, Math.floor((Date.now() - app.lastStateAt) / 1000));
+    dom.stateUpdated.textContent = 'state updated ' + seconds + 's ago';
   }
 
   function refreshState() {
-    return api('/api/state').then(function (data) {
+    if (app.stateFetch) return app.stateFetch;
+    app.stateFetch = api('/api/state').then(function (data) {
+      app.stateFetch = null;
       app.server = data && data.server ? data.server : app.server;
       handleState({ server: app.server, run: data ? data.run : null }, 'fetch');
       return data;
+    }, function (err) {
+      app.stateFetch = null;
+      throw err;
     });
+    return app.stateFetch;
+  }
+
+  /* ------------------------------------------------------------- SSE stream */
+
+  /* EventSource heartbeats are comment frames, which are invisible to JS, so
+   * the watchdog resets on real events and treats prolonged silence as a dead
+   * stream: close it and let the reconnect path refresh the state. */
+  function bumpSseWatchdog() {
+    if (app.watchdogTimer) window.clearTimeout(app.watchdogTimer);
+    app.watchdogTimer = window.setTimeout(function () {
+      app.watchdogTimer = null;
+      onWatchdogTimeout();
+    }, SSE_WATCHDOG_MS);
+  }
+
+  function clearSseWatchdog() {
+    if (!app.watchdogTimer) return;
+    window.clearTimeout(app.watchdogTimer);
+    app.watchdogTimer = null;
+  }
+
+  function onWatchdogTimeout() {
+    if (app.authFailed) return;
+    setConn(false);
+    if (app.sse) {
+      try { app.sse.close(); } catch (e) { /* noop */ }
+      app.sse = null;
+    }
+    app.sseRetry = 0;
+    connectSSE();
   }
 
   function connectSSE() {
@@ -1200,22 +1371,29 @@
       return;
     }
     app.sse = source;
+    bumpSseWatchdog();
     source.addEventListener('open', function () {
       app.sseRetry = 0;
       setConn(true);
+      bumpSseWatchdog();
+      /* A (re)connected stream may have missed a terminal transition. */
+      refreshState().catch(function () { /* the poll timer retries */ });
     });
     source.addEventListener('state', function (event) {
+      bumpSseWatchdog();
       var data = null;
       try { data = JSON.parse(event.data); } catch (e) { return; }
       handleState(data, 'sse');
     });
     source.addEventListener('log', function (event) {
+      bumpSseWatchdog();
       var data = null;
       try { data = JSON.parse(event.data); } catch (e) { return; }
       ingestLogChunk(data);
     });
     source.addEventListener('error', function () {
       setConn(false);
+      clearSseWatchdog();
       try { source.close(); } catch (e) { /* noop */ }
       if (app.sse === source) app.sse = null;
       if (!app.authFailed) scheduleReconnect();
@@ -1247,12 +1425,12 @@
 
     var head = el('div', { class: 'modal-head' }, [
       el('div', null, [
-        el('h2', { attrs: { id: titleId }, text: options.title || '对话框' }),
+        el('h2', { attrs: { id: titleId }, text: options.title || 'Dialog' }),
         options.subtitle ? el('p', { text: options.subtitle }) : null
       ]),
       el('button', {
         class: 'btn-remove',
-        attrs: { type: 'button', 'aria-label': '关闭对话框' },
+        attrs: { type: 'button', 'aria-label': 'Close dialog' },
         text: '✕',
         on: { click: function () { close(null); } }
       })
@@ -1336,12 +1514,12 @@
         body.appendChild(el('pre', { class: 'modal-pre', text: options.preText }));
       }
       openModal({
-        title: options.title || '请确认',
+        title: options.title || 'Please confirm',
         small: true,
         body: body,
         buttons: [
-          { label: '取消', value: false },
-          { label: options.confirmLabel || '确认', value: true, primary: true, danger: options.danger }
+          { label: 'Cancel', value: false },
+          { label: options.confirmLabel || 'Confirm', value: true, primary: true, danger: options.danger }
         ],
         onClose: function (value) { resolve(value === true); }
       });
@@ -1365,17 +1543,17 @@
     var body = el('div');
     body.appendChild(el('p', {
       class: 'modal-note',
-      text: '文件不经过浏览器上传：这里只读取服务端的目录列表，点选后把绝对路径填进表单。不上传、不复制文件。'
+      text: 'Files are not uploaded through the browser: this only lists server directories and fills the chosen absolute path into the form. Nothing is uploaded or copied.'
     }));
 
     var pathInput = el('input', {
-      attrs: { type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': '服务端目录或文件绝对路径' }
+      attrs: { type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Absolute path of a server directory or file' }
     });
     pathInput.value = state.path;
     var goButton = el('button', {
       class: 'btn',
       attrs: { type: 'button' },
-      text: '转到',
+      text: 'Go',
       on: { click: function () { load(pathInput.value.trim()); } }
     });
     pathInput.addEventListener('keydown', function (event) {
@@ -1397,11 +1575,11 @@
     var useButton = el('button', {
       class: 'btn btn-primary',
       attrs: { type: 'button' },
-      text: '使用当前路径',
+      text: 'Use this path',
       on: {
         click: function () {
           var value = (pathInput.value || '').trim();
-          if (!value) { message.textContent = '请输入绝对路径。'; message.className = 'fs-hint bad'; return; }
+          if (!value) { message.textContent = 'Enter an absolute path.'; message.className = 'fs-hint bad'; return; }
           finish(value);
         }
       }
@@ -1414,7 +1592,7 @@
 
     function setBusy(busy) {
       goButton.disabled = busy;
-      goButton.textContent = busy ? '读取中…' : '转到';
+      goButton.textContent = busy ? 'Loading…' : 'Go';
     }
 
     function renderList(data) {
@@ -1433,7 +1611,7 @@
         list.appendChild(el('li', null, [el('button', {
           class: 'fs-item fs-dir',
           attrs: { type: 'button' },
-          text: '↵ 上一级',
+          text: '↵ Parent directory',
           on: { click: function () { load(data.parent); } }
         })]));
       }
@@ -1446,7 +1624,7 @@
           text: null
         }, [
           el('span', { class: 'fs-name', text: dir.name + '/' }),
-          el('span', { class: 'fs-meta', text: '目录' })
+          el('span', { class: 'fs-meta', text: 'dir' })
         ])]));
       });
 
@@ -1465,7 +1643,7 @@
       });
 
       if (!data.dirs.length && !files.length) {
-        list.appendChild(el('li', { class: 'fs-empty', text: '此目录没有可显示的子目录或序列文件。' }));
+        list.appendChild(el('li', { class: 'fs-empty', text: 'No subdirectories or sequence files to show here.' }));
       }
     }
 
@@ -1484,29 +1662,29 @@
       }).catch(function (err) {
         setBusy(false);
         state.manual = true;
-        message.textContent = '无法打开为目录：' + (err.message || '未知错误')
-          + '。如果是绝对文件路径，可直接点「使用当前路径」。';
+        message.textContent = 'Cannot open as a directory: ' + (err.message || 'unknown error')
+          + '. If this is an absolute file path, click “Use this path” directly.';
         message.className = 'fs-hint bad';
         clear(list);
       });
     }
 
     var modal = openModal({
-      title: '选择服务端文件',
-      subtitle: options.subtitle || '起点：FASTQ 用 data/raw，参考用 data/reference',
+      title: 'Select a server file',
+      subtitle: options.subtitle || 'Starting points: data/raw for FASTQ, data/reference for reference FASTA',
       body: body,
       buttons: [
-        { label: '取消', value: false }
+        { label: 'Cancel', value: false }
       ],
       onClose: function () { /* nothing to clean up */ }
     });
-    /* Replace the footer with [取消] [使用当前路径]. */
+    /* Replace the footer with [Cancel] [Use this path]. */
     var foot = modal.element.querySelector('.modal-foot');
     clear(foot);
     foot.appendChild(el('button', {
       class: 'btn',
       attrs: { type: 'button' },
-      text: '取消',
+      text: 'Cancel',
       on: { click: function () { modal.close(false); } }
     }));
     foot.appendChild(useButton);
@@ -1528,20 +1706,20 @@
       var fq1 = (sample.fq1 || '').trim();
       var fq2 = (sample.fq2 || '').trim();
       var reference = (sample.reference || '').trim();
-      if (!name) pushError(errors, index, 'name', '样本名不能为空');
-      else if (name === '.' || name === '..') pushError(errors, index, 'name', '样本名不能是 . 或 ..');
-      else if (!SAMPLE_RE.test(name)) pushError(errors, index, 'name', '样本名只允许字母、数字、点、下划线、连字符');
-      else if (seen[name]) pushError(errors, index, 'name', '样本名重复：' + name);
+      if (!name) pushError(errors, index, 'name', 'Sample name is required');
+      else if (name === '.' || name === '..') pushError(errors, index, 'name', 'Sample name cannot be . or ..');
+      else if (!SAMPLE_RE.test(name)) pushError(errors, index, 'name', 'Sample name may only contain letters, digits, dot, underscore and hyphen');
+      else if (seen[name]) pushError(errors, index, 'name', 'Duplicate sample name: ' + name);
       else seen[name] = true;
 
-      if (!fq1) pushError(errors, index, 'fq1', 'R1 路径必填');
-      else if (fq1.charAt(0) !== '/') pushError(errors, index, 'fq1', 'R1 必须是绝对路径');
-      if (!fq2) pushError(errors, index, 'fq2', 'R2 路径必填');
-      else if (fq2.charAt(0) !== '/') pushError(errors, index, 'fq2', 'R2 必须是绝对路径');
-      else if (fq1 && fq2 === fq1) pushError(errors, index, 'fq2', 'R2 不能与 R1 相同');
-      if (reference && reference.charAt(0) !== '/') pushError(errors, index, 'reference', '参考必须是绝对路径');
+      if (!fq1) pushError(errors, index, 'fq1', 'R1 path is required');
+      else if (fq1.charAt(0) !== '/') pushError(errors, index, 'fq1', 'R1 must be an absolute path');
+      if (!fq2) pushError(errors, index, 'fq2', 'R2 path is required');
+      else if (fq2.charAt(0) !== '/') pushError(errors, index, 'fq2', 'R2 must be an absolute path');
+      else if (fq1 && fq2 === fq1) pushError(errors, index, 'fq2', 'R2 must differ from R1');
+      if (reference && reference.charAt(0) !== '/') pushError(errors, index, 'reference', 'Reference must be an absolute path');
       ['species', 'strain'].forEach(function (field) {
-        if (/[\t\r\n]/.test(sample[field] || '')) pushError(errors, index, field, field + ' 不能包含 tab 或换行');
+        if (/[\t\r\n]/.test(sample[field] || '')) pushError(errors, index, field, field + ' must not contain tabs or newlines');
       });
     });
     return errors;
@@ -1599,12 +1777,12 @@
       mapped.push({
         index: index,
         field: error.field || 'name',
-        message: error.message || ('校验失败：' + (error.code || 'invalid'))
+        message: error.message || ('Validation failed: ' + (error.code || 'invalid'))
       });
     });
     renderErrors(mapped);
     var first = mapped[0];
-    if (first) toast('样本表校验失败：' + first.message, 'error');
+    if (first) toast('Sample sheet validation failed: ' + first.message, 'error');
   }
 
   /* ---------------------------------------------------------------- actions */
@@ -1630,12 +1808,12 @@
 
   function startRun() {
     if (app.startBusy) return;
-    if (app.run && app.run.state === 'running') { toast('已有运行在进行中', 'error'); return; }
+    if (app.run && app.run.state === 'running') { toast('A run is already in progress', 'error'); return; }
 
     var errors = validateDraft();
     if (errors.length) {
       renderErrors(errors);
-      toast('请先修正样本行（' + errors.length + ' 处问题）', 'error');
+      toast('Fix the sample rows first (' + errors.length + ' issue(s))', 'error');
       return;
     }
     clearSampleErrors();
@@ -1644,7 +1822,7 @@
       app.startBusy = true;
       syncRunButtons();
       api('/api/run', { method: 'POST', body: buildPayload() }).then(function (data) {
-        toast('已提交运行' + (data && data.run_id ? '：' + data.run_id : ''), 'ok');
+        toast('Run submitted' + (data && data.run_id ? ': ' + data.run_id : ''), 'ok');
         return refreshState();
       }).catch(function (err) {
         var detailErrors = null;
@@ -1655,12 +1833,12 @@
         if (err.status === 400 && detailErrors) {
           renderServerErrors(detailErrors);
         } else if (err.status === 409) {
-          toast('无法启动：' + (err.message || '已有运行或外部 nextflow 正在活动'), 'error');
+          toast('Cannot start: ' + (err.message || 'a run or an external nextflow process is already active'), 'error');
           refreshState().catch(function () { /* nothing else to do */ });
         } else if (err.status === 403) {
           /* overlay already shown */
         } else {
-          toast('启动失败：' + (err.message || '未知错误'), 'error');
+          toast('Failed to start: ' + (err.message || 'unknown error'), 'error');
         }
       }).then(function () {
         app.startBusy = false;
@@ -1673,11 +1851,11 @@
       var plan = existing && existing.clean_plan;
       var run = function () {
         confirmDialog({
-          title: '确认清空产物并运行',
-          message: '将先执行 bin/pipeline-clean outputs --yes 删除下列 nextflow 产物（不可撤销），然后启动管线。'
-            + 'data/、data/reference/ 与仓库文件不在允许清单内。',
-          preText: plan && plan.text ? plan.text : '（后端未返回清理清单；仍会执行 bin/pipeline-clean outputs --yes）',
-          confirmLabel: '清空并运行',
+          title: 'Confirm cleaning outputs and starting',
+          message: 'This first runs bin/pipeline-clean outputs --yes to delete the nextflow outputs listed below (irreversible), then starts the pipeline. '
+            + 'data/, data/reference/ and repository files are not on the allow-list.',
+          preText: plan && plan.text ? plan.text : '(The backend returned no clean plan; bin/pipeline-clean outputs --yes will still run.)',
+          confirmLabel: 'Clean and run',
           danger: true
         }).then(function (ok) { if (ok) proceed(); });
       };
@@ -1690,19 +1868,19 @@
 
   function cancelRun() {
     confirmDialog({
-      title: '取消运行',
-      message: '将向运行进程组发送 SIGTERM；10 秒内未退出则 SIGKILL。work/ 与 results/ 中的产物保留，'
-        + '之后可切换「续跑」重新开始。',
-      confirmLabel: '取消运行',
+      title: 'Cancel run',
+      message: 'SIGTERM is sent to the run process group; after 10 s without exit it gets SIGKILL. work/ and results/ are kept; '
+        + 'afterwards you can switch to “Resume” and start again.',
+      confirmLabel: 'Cancel run',
       danger: true
     }).then(function (ok) {
       if (!ok) return;
       api('/api/cancel', { method: 'POST' }).then(function () {
-        toast('已发送取消请求，等待进程退出…', 'ok');
+        toast('Cancel requested; waiting for the process to exit…', 'ok');
         refreshState().catch(function () { /* state event will follow */ });
       }).catch(function (err) {
-        if (err.status === 409) toast('没有本 UI 启动的活动运行（外部 nextflow 不会被杀）', 'error');
-        else toast('取消失败：' + (err.message || '未知错误'), 'error');
+        if (err.status === 409) toast('No active run started by this UI (an external nextflow process is never killed)', 'error');
+        else toast('Cancel failed: ' + (err.message || 'unknown error'), 'error');
       });
     });
   }
@@ -1770,8 +1948,8 @@
       openFsBrowser({
         startPath: browserStartPath(field, currentValue),
         subtitle: field === 'reference'
-          ? '起点为 data/reference；参考为可选 FASTA'
-          : '起点为 data/raw；选择 FASTQ（R1/R2）',
+          ? 'Starting at data/reference; the reference is an optional FASTA'
+          : 'Starting at data/raw; pick the FASTQ files (R1/R2)',
         onPick: function (path) {
           var cardNow = cardAt(index);
           if (!cardNow) return;
@@ -1844,7 +2022,7 @@
     dom.btnLogDownload.addEventListener('click', function (event) {
       if (this.classList.contains('is-disabled') || this.getAttribute('aria-disabled') === 'true') {
         event.preventDefault();
-        toast('还没有可下载的运行日志', 'error');
+        toast('There is no run log to download yet', 'error');
       }
     });
 
@@ -1856,13 +2034,13 @@
     dom.linkOpenReport.addEventListener('click', function (event) {
       if (this.getAttribute('aria-disabled') === 'true') {
         event.preventDefault();
-        toast('还没有报告可以打开', 'error');
+        toast('There is no report to open yet', 'error');
       }
     });
     dom.linkDownloadResults.addEventListener('click', function (event) {
       if (this.getAttribute('aria-disabled') === 'true') {
         event.preventDefault();
-        toast('还没有 results/ 可以下载', 'error');
+        toast('There is nothing in results/ to download yet', 'error');
       }
     });
 
@@ -1873,15 +2051,27 @@
       copyText(target ? target.textContent.trim() : '');
     });
 
+    /* Refresh fallbacks: pause polling while hidden, resume and refresh at
+     * once when the tab becomes visible or the window regains focus. */
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) return;
-      if (!app.sse && !app.authFailed) {
-        connectSSE();
-        refreshState().catch(function () { /* handled by reconnect */ });
+      if (document.visibilityState === 'hidden') {
+        stopStatePolling();
+        return;
       }
+      startStatePolling();
+      if (app.authFailed) return;
+      if (!app.sse) connectSSE();
+      refreshState().catch(function () { /* handled by the reconnect loop */ });
+    });
+
+    window.addEventListener('focus', function () {
+      if (document.visibilityState === 'hidden' || app.authFailed) return;
+      refreshState().catch(function () { /* the poll timer retries */ });
     });
 
     window.addEventListener('beforeunload', function () {
+      stopStatePolling();
+      clearSseWatchdog();
       if (app.sse) { try { app.sse.close(); } catch (e) { /* noop */ } }
     });
   }
@@ -1912,6 +2102,12 @@
     dom.preflightList = $('preflight-list');
     dom.preflightFoot = $('preflight-foot');
     dom.runMeta = $('run-meta');
+    dom.stateUpdated = $('state-updated');
+    dom.overallProgress = $('overall-progress');
+    dom.progressFill = dom.overallProgress ? dom.overallProgress.querySelector('.progress-fill') : null;
+    dom.progressPct = $('progress-pct');
+    dom.progressCaption = $('progress-caption');
+    dom.currentStage = $('current-stage');
     dom.btnRun = $('btn-run');
     dom.btnCancel = $('btn-cancel');
     dom.actionHint = $('action-hint');
@@ -1962,8 +2158,12 @@
     renderRunPanel();
     renderResults();
     updateLogMeta();
+    renderStateUpdated();
 
-    app.elapsedTimer = window.setInterval(tickElapsed, 1000);
+    app.elapsedTimer = window.setInterval(tickSecond, 1000);
+
+    /* Independent of SSE: poll the state endpoint while the tab is visible. */
+    startStatePolling();
 
     refreshState().then(function () {
       /* The token has served its purpose once the cookie is set; keep the
@@ -1973,7 +2173,7 @@
       }
     }).catch(function (err) {
       if (err.status === 403) return;
-      toast(err.message || '无法读取运行状态', 'error');
+      toast(err.message || 'Cannot read run state', 'error');
     }).then(function () {
       connectSSE();
       loadPreflight(true);

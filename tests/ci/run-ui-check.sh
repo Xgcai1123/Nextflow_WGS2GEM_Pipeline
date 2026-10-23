@@ -718,6 +718,67 @@ static_checks() {
         fi
     done
 
+    # 0.3.0: the whole shell is English. Assert it at the source, not only on
+    # the served page: a Chinese string in app.js (or a comment) is exactly how
+    # the next untranslated toast gets missed. Glob, not a fixed list, so a new
+    # ui/*.js cannot escape the language lint.
+    for f in "${PROJECT_DIR}"/ui/*.html "${PROJECT_DIR}"/ui/*.js "${PROJECT_DIR}"/ui/*.css; do
+        [ -f "${f}" ] || continue
+        expect_no_cjk_file "$(basename "${f}") is English-only (CJK count 0)" "${f}"
+    done
+    # Backend sources too: task 0.3.0 translates comments/help as well as the
+    # JSON strings, and a CJK comment is where the next English-only rule rots.
+    for f in "${PROJECT_DIR}"/ui/*.py; do
+        [ -f "${f}" ] || continue
+        expect_no_cjk_file "$(basename "${f}") is English-only (CJK count 0)" "${f}"
+    done
+
+    # 0.3.0 total progress bar: the element is static markup (index.html) and
+    # the value update is app.js' job. Assert both halves, so neither a static
+    # placeholder nor a renderer without an element can pass on its own.
+    expect_grep "index.html declares the overall progress bar (#overall-progress)" \
+        'id="overall-progress"' "${UI_INDEX}"
+    expect_grep "index.html marks the progress bar role=progressbar" \
+        'role="progressbar"' "${UI_INDEX}"
+    expect_grep "app.js renders #overall-progress" 'overall-progress' "${UI_APPJS}"
+    expect_grep "app.js publishes the progress via aria-valuenow" 'aria-valuenow' "${UI_APPJS}"
+    # The percentage is a task-count ratio, clamped to 0-100 (a run can submit
+    # more tasks than expected); assert the contract fields and the clamp, not
+    # a line number or a variable name.
+    expect_grep "app.js derives progress from tasks.completed" 'tasks.completed' "${UI_APPJS}"
+    expect_grep "app.js derives progress from tasks.expected" 'tasks.expected' "${UI_APPJS}"
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+sys.exit(0 if (re.search(r"Math\.min\(\s*100", text)
+               and re.search(r"Math\.max\(\s*0", text)) else 1)
+PY
+    then
+        pass "app.js clamps the progress percentage to 0-100"
+    else
+        fail "app.js progress percentage is not clamped to 0-100"
+    fi
+
+    # 0.3.0 state-refresh fallbacks: SSE must not be a single point of failure.
+    expect_grep "app.js refetches state on visibilitychange" 'visibilitychange' "${UI_APPJS}"
+    expect_grep "app.js refetches state on window focus" "addEventListener('focus'" "${UI_APPJS}"
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+# Paused while hidden: the poll callback must consult visibilityState and the
+# visibilitychange handler must stop the timer.
+sys.exit(0 if (re.search(r"visibilityState\s*===\s*['\"]hidden['\"]", text)
+               and "stopStatePolling" in text) else 1)
+PY
+    then
+        pass "app.js pauses the state poll while the tab is hidden"
+    else
+        fail "app.js does not pause the state poll while the tab is hidden"
+    fi
+    expect_state_polling
+    expect_sse_watchdog
+    expect_terminal_refetch
+
     if command -v node >/dev/null 2>&1; then
         if node --check "${UI_APPJS}" >"${WORK}/node-check.log" 2>&1; then
             pass "node --check ui/app.js"
@@ -747,6 +808,180 @@ if bad:
     print("\n".join(bad))
     sys.exit(1)
 PY
+}
+
+# ---------------------------------------------------------------------------
+# 0.3.0 language / progress / refresh-fallback helpers
+# ---------------------------------------------------------------------------
+
+# Number of CJK characters in a file; -1 when unreadable (then the assertion
+# fails rather than silently "passing" a missing file). Covers the CJK
+# ideographs plus the extension-A block, which is enough for a language lint.
+cjk_count() {
+    python3 - "$1" <<'PY'
+import re, sys
+try:
+    text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+except OSError:
+    print(-1)
+    sys.exit(0)
+print(len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text)))
+PY
+}
+
+expect_no_cjk_file() { # <label> <file>
+    local label="$1" file="$2" n
+    n="$(cjk_count "${file}")"
+    if [ "${n}" = "0" ]; then
+        pass "${label}"
+    else
+        fail "${label} -- ${n} CJK character(s) remain"
+    fi
+}
+
+# User-visible JSON strings must be English. `mode` selects what the contract
+# puts in front of an operator:
+#   validation  400 body: top-level message + every errors[].message
+#   preflight   every checks[].label / detail / hint
+#   message     top-level message + detail (API error bodies)
+#   run_failed  /api/state run.failed.message
+#   run_message /api/state run.message (interrupted / attach explanation)
+no_cjk_json() { # <file> <mode>; prints the offending fields, exits 1 if any
+    python3 - "$1" "$2" <<'PY'
+import json, re, sys
+path, mode = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(open(path, "r", encoding="utf-8"))
+except Exception as exc:
+    print("cannot parse JSON: %s" % exc)
+    sys.exit(0)
+cjk = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+values = []
+if mode == "validation":
+    values.append(("message", data.get("message")))
+    for i, err in enumerate(data.get("errors") or []):
+        if isinstance(err, dict):
+            values.append(("errors[%d].message" % i, err.get("message")))
+elif mode == "preflight":
+    for i, check in enumerate(data.get("checks") or []):
+        if isinstance(check, dict):
+            for key in ("label", "detail", "hint"):
+                values.append(("checks[%s].%s" % (check.get("id") or i, key),
+                               check.get(key)))
+elif mode == "message":
+    values.append(("message", data.get("message")))
+    values.append(("detail", data.get("detail")))
+elif mode == "run_failed":
+    run = data.get("run") or {}
+    failed = run.get("failed") or {}
+    values.append(("run.failed.message", failed.get("message")))
+elif mode == "run_message":
+    run = data.get("run") or {}
+    values.append(("run.message", run.get("message")))
+else:
+    print("unknown mode %r" % mode)
+    sys.exit(0)
+bad = ["%s=%r" % (where, value) for where, value in values
+       if isinstance(value, str) and cjk.search(value)]
+if bad:
+    print("; ".join(bad[:4]))
+    sys.exit(1)
+PY
+}
+
+expect_no_cjk_json() { # <label> <file> <mode>
+    local label="$1" file="$2" mode="$3" out
+    if out="$(no_cjk_json "${file}" "${mode}")"; then
+        pass "${label}"
+    else
+        fail "${label} -- ${out}"
+    fi
+}
+
+# The 5 s GET /api/state poll. app.js already has a 1 s elapsed-time ticker, so
+# "contains setInterval" alone would not prove the fallback exists: require a
+# timer that refreshes state. `setInterval(refreshState, 5000)`,
+# `setInterval(pollState, POLL_MS)` (with pollState calling refreshState) and
+# `setInterval(function () { refreshState(); }, POLL_MS)` all qualify.
+expect_state_polling() {
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+
+def refreshes_state(args):
+    if "refreshState" in args or "/api/state" in args:
+        return True
+    # setInterval(pollState, ...): resolve the identifier to its function body.
+    m = re.match(r"\s*([A-Za-z_$][\w$]*)\s*,", args)
+    if m:
+        name = re.escape(m.group(1))
+        fm = re.search(r"function\s+%s\s*\([^)]*\)\s*\{" % name, text)
+        if fm:
+            return "refreshState" in text[fm.end():fm.end() + 2000]
+    return False
+
+calls = re.findall(r"setInterval\s*\(([^;]{0,800}?)\)\s*;", text, re.S)
+sys.exit(0 if any(refreshes_state(call) for call in calls) else 1)
+PY
+    then
+        pass "app.js polls GET /api/state on a timer (setInterval -> refreshState)"
+    else
+        fail "app.js has no setInterval that refreshes GET /api/state"
+    fi
+    # 5 s is the contract (visible tab -> every 5 s). Accept a named interval
+    # constant or a literal argument; a bare "5000" elsewhere in the file (a
+    # timeout, a UI constant) must not satisfy this on its own.
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+named = re.search(r"(?i)\b(?:STATE_)?POLL[A-Z0-9_]*\s*=\s*5000\b", text)
+literal = re.search(r"setInterval\s*\([^;]{0,400}?,\s*5000\s*\)", text)
+sys.exit(0 if (named or literal) else 1)
+PY
+    then
+        pass "app.js state poll interval is 5 s (STATE_POLL_MS / setInterval literal)"
+    else
+        fail "app.js state poll has no 5 s interval (POLL constant or setInterval literal)"
+    fi
+}
+
+# The SSE watchdog: no event/heartbeat for 45 s must close and reconnect.
+# Require BOTH a watchdog marker and the 45 s timeout, so an unrelated 45000
+# constant (or a bare EventSource reconnect) cannot satisfy one half and pass.
+expect_sse_watchdog() {
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+marker = re.compile(r"(?i)(watchdog|sse_silence|silence_ms|last_event_at)")
+timeout = re.compile(r"(45000|45_000|45\s*\*\s*1000)")
+sys.exit(0 if (marker.search(text) and timeout.search(text)) else 1)
+PY
+    then
+        pass "app.js has an SSE watchdog (45 s without events -> close + reconnect)"
+    else
+        fail "app.js lacks an SSE watchdog: needs a watchdog marker AND a 45 s timeout"
+    fi
+}
+
+# Terminal state arrives over SSE, but the report/exit_code may be finalised a
+# moment later: app.js must refetch state once more after entering a terminal
+# state. Assert a deferred refresh (setTimeout) rather than a bare refreshState.
+expect_terminal_refetch() {
+    if python3 - "${UI_APPJS}" <<'PY'
+import re, sys
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+for m in re.finditer(r"setTimeout\s*\(", text):
+    window = text[m.start():m.start() + 700]
+    if ("refreshState" in window or "refresh" in window) and re.search(
+            r"(?i)(terminal|done|failed|cancelled|interrupted|600)", window):
+        sys.exit(0)
+sys.exit(1)
+PY
+    then
+        pass "app.js refetches state shortly after a terminal SSE state"
+    else
+        fail "app.js has no deferred state refetch for terminal states"
+    fi
 }
 
 # ===========================================================================
@@ -840,8 +1075,9 @@ phase_startup_auth_preflight() {
     code="$(curl -sS --max-time 20 -o "${WORK}/index-403.html" -w '%{http_code}' "${BASE}/")"
     expect_eq "GET / without token -> 403" "403" "${code}"
     if grep -qi '<html' "${WORK}/index-403.html"; then pass "403 response is HTML"; else fail "403 response is not HTML"; fi
+    expect_no_cjk_file "403 refusal page is English (no CJK)" "${WORK}/index-403.html"
 
-    # --- GET / with token: 200 + Set-Cookie + Chinese title
+    # --- GET / with token: 200 + Set-Cookie + English single page
     code="$(curl -sS --max-time 20 -c "${WORK}/cookies.txt" -D "${WORK}/hdr-index.txt" \
         -o "${WORK}/index.html" -w '%{http_code}' "${BASE}/?token=${TOKEN}")"
     expect_eq "GET /?token=... -> 200" "200" "${code}"
@@ -852,7 +1088,27 @@ phase_startup_auth_preflight() {
     fi
     if header_has "${WORK}/hdr-index.txt" '^set-cookie:.*httponly'; then pass "cookie is HttpOnly"; else fail "cookie is not HttpOnly"; fi
     if header_has "${WORK}/hdr-index.txt" '^set-cookie:.*samesite=strict'; then pass "cookie is SameSite=Strict"; else fail "cookie is not SameSite=Strict"; fi
-    if html_title_ok "${WORK}/index.html"; then pass "GET / serves the Chinese single page (<title> + CJK)"; else fail "GET / body is not the Chinese single page"; fi
+    if html_english_page_ok "${WORK}/index.html"; then
+        pass "GET / serves the English single page (<title> + no CJK)"
+    else
+        fail "GET / body is not the English single page: $(html_english_page_why "${WORK}/index.html")"
+    fi
+    expect_grep "GET / serves the total progress bar (#overall-progress)" \
+        'id="overall-progress"' "${WORK}/index.html"
+    expect_grep "GET / serves the progress bar with role=progressbar" \
+        'role="progressbar"' "${WORK}/index.html"
+    if python3 - "${WORK}/index.html" <<'PY'
+import re, sys
+html = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+m = re.search(r"<[^>]*\bid=[\"']overall-progress[\"'][^>]*>", html)
+tag = m.group(0) if m else ""
+sys.exit(0 if ('aria-valuemin="0"' in tag and 'aria-valuemax="100"' in tag) else 1)
+PY
+    then
+        pass "served progress bar advertises the 0-100 range (aria-valuemin/max)"
+    else
+        fail "served #overall-progress lacks aria-valuemin=\"0\" / aria-valuemax=\"100\""
+    fi
 
     # --- cookie alone is enough (browser reload after the first navigation)
     code="$(curl -sS --max-time 20 -b "${WORK}/cookies.txt" -o "${WORK}/index-cookie.html" -w '%{http_code}' "${BASE}/")"
@@ -885,6 +1141,7 @@ phase_startup_auth_preflight() {
     code="$(curl -sS --max-time 20 -H 'Content-Type: application/json' -d '{}' \
         -o "${WORK}/post-noauth.json" -w '%{http_code}' "$(api_url run)")"
     expect_eq "POST /api/run without token -> 403 (auth before body)" "403" "${code}"
+    expect_no_cjk_json "403 API message is English (no CJK)" "${WORK}/post-noauth.json" message
     code="$(curl -sS --max-time 20 -H 'Content-Type: application/json' -d '{}' \
         -o "${WORK}/cancel-noauth.json" -w '%{http_code}' "$(api_url cancel)")"
     expect_eq "POST /api/cancel without token -> 403" "403" "${code}"
@@ -913,6 +1170,7 @@ phase_startup_auth_preflight() {
     fi
     get_api "/api/preflight" "${WORK}/preflight.json" >/dev/null
     expect_eq "preflight nextflow check is ok (fake engine on PATH)" "ok" "$(preflight_status "${WORK}/preflight.json" nextflow)"
+    expect_no_cjk_json "preflight label/detail/hint are English (no CJK)" "${WORK}/preflight.json" preflight
     local ids
     ids="$(python3 - "${WORK}/preflight.json" <<'PY'
 import json, sys
@@ -953,15 +1211,33 @@ PY
     fi
 }
 
-html_title_ok() {
+# The served page is the English operator shell (0.3.0): a real <title> naming
+# the product, <html lang="en">, and no CJK anywhere in the document (text,
+# attributes, comments).
+html_english_page_ok() {
     python3 - "$1" <<'PY'
-import sys
+import re, sys
 data = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
-if "<title>" not in data.lower():
+m = re.search(r"<title>(.*?)</title>", data, re.S | re.I)
+if not m or "NextFlow-WGS2GEM" not in m.group(1):
     sys.exit(1)
-if not any(ord(ch) > 127 for ch in data):
+if not re.search(r"<html[^>]*\blang=[\"']en[\"']", data, re.I):
+    sys.exit(1)
+if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", data):
     sys.exit(1)
 sys.exit(0)
+PY
+}
+
+html_english_page_why() { # only for the failure message
+    python3 - "$1" <<'PY'
+import re, sys
+data = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+m = re.search(r"<title>(.*?)</title>", data, re.S | re.I)
+lang = re.search(r"<html[^>]*\blang=[\"']([^\"']+)", data, re.I)
+cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", data))
+print("title=%r, lang=%r, CJK chars=%d"
+      % (m.group(1).strip() if m else None, lang.group(1) if lang else None, cjk))
 PY
 }
 
@@ -1006,6 +1282,8 @@ PY
                 fail "${label}: errors[] lacks row+field ($(head -c 200 "${WORK}/val-resp.json"))"
             fi
         fi
+        expect_no_cjk_json "${label}: 400 message + errors[].message are English" \
+            "${WORK}/val-resp.json" validation
         get_state
         expect_empty "${label}: state.run stays null (no spawn)" "$(state_field run.state)"
     }
@@ -1420,6 +1698,7 @@ phase_failed_run() {
     fi
     if [ -n "$(state_field run.failed.work_dir)" ]; then pass "failed.work_dir is set"; else fail "failed.work_dir is missing"; fi
     if [ -n "$(state_field run.failed.message)" ]; then pass "failed.message is set"; else fail "failed.message is missing"; fi
+    expect_no_cjk_json "failed.message is English (no CJK)" "${WORK}/state.json" run_failed
     if [ -n "$(state_field run.failed.reason)" ]; then pass "failed.reason is set ($(state_field run.failed.reason))"; else fail "failed.reason is missing"; fi
     expect_eq "failed run has no report" "" "$(state_field run.report.path)"
     expect_eq "failed run exit_code is 1" "1" "$(state_field run.exit_code)"
@@ -1576,6 +1855,7 @@ PY
     else
         fail "interrupted run has no reason/message explaining the interruption"
     fi
+    expect_no_cjk_json "interrupted run message is English (no CJK)" "${WORK}/state.json" run_message
 }
 
 # ===========================================================================
@@ -1714,6 +1994,8 @@ phase_missing_nextflow() {
     if wait_api_ready "/api/preflight" 40; then pass "preflight still answers with a missing nextflow"; else fail "preflight did not answer with a missing nextflow"; fi
     get_api "/api/preflight" "${WORK}/preflight-missing.json" >/dev/null
     expect_eq "preflight nextflow check is fail" "fail" "$(preflight_status "${WORK}/preflight-missing.json" nextflow)"
+    expect_no_cjk_json "preflight (missing engine) label/detail/hint are English" \
+        "${WORK}/preflight-missing.json" preflight
     code="$(get_api "/api/state" "${WORK}/state-nonf.json")"
     expect_eq "GET /api/state still 200 (server did not crash)" "200" "${code}"
     code="$(curl -sS --max-time 20 -o "${WORK}/index-nonf.html" -w '%{http_code}' "${BASE}/?token=${TOKEN}")"

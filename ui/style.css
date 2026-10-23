@@ -613,6 +613,93 @@ body.modal-open { overflow: hidden; }
 }
 .counter-failed b { color: var(--bad); }
 
+/* ---------------------------------------------------------------- progress */
+
+.progress-wrap {
+  margin-top: 7px;
+  padding: 7px 9px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: #f8fafc;
+}
+.progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.progress-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--grey);
+}
+.progress-pct {
+  font: 700 18px/1.1 var(--mono);
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+}
+.progress {
+  position: relative;
+  height: 14px;
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #e4eaf1;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--teal);
+  transition: width .35s ease, background-color .2s ease;
+}
+.progress.is-running .progress-fill { background: var(--teal); }
+.progress.is-done .progress-fill { background: var(--ok); }
+.progress.is-failed .progress-fill { background: var(--bad); }
+.progress.is-cancelled .progress-fill { background: #8b95a1; }
+.progress.is-interrupted .progress-fill { background: var(--interrupted); }
+.progress.is-done .progress-pct { color: var(--ok); }
+.progress.is-failed .progress-pct { color: var(--bad); }
+.progress-caption {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-top: 2px;
+}
+.progress-stage-wrap { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.progress-stage-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--grey);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  flex: 0 0 auto;
+}
+.current-stage {
+  font-size: 11.5px;
+  color: var(--navy);
+  font-family: var(--mono);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.state-updated {
+  font-size: 10.5px;
+  color: #8a96a3;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------------ ladder */
 
 .panel-run { flex: 0 0 auto; }
@@ -984,6 +1071,8 @@ code.path {
   .report-actions .btn-primary { grid-column: auto; }
   .check-item { grid-template-columns: 16px 92px minmax(0, 1fr); }
   .counters { grid-template-columns: repeat(2, 1fr); }
+  .progress-pct { font-size: 15px; }
+  .progress-meta { align-items: flex-start; }
   .modal-body { padding: 10px; }
 }
 

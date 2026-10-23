@@ -39,8 +39,8 @@ PROJECT_SOURCE="$(cd -P "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
 SERVER_PY="${PROJECT_SOURCE}/ui/server.py"
 
 if [ ! -f "${SERVER_PY}" ]; then
-    printf 'pipeline-ui: 找不到 %s\n' "${SERVER_PY}" >&2
-    printf 'pipeline-ui: 请在仓库检出的 bin/ 目录下运行本脚本\n' >&2
+    printf 'pipeline-ui: cannot find %s\n' "${SERVER_PY}" >&2
+    printf 'pipeline-ui: run this script from the bin/ directory of a repository checkout\n' >&2
     exit 1
 fi
 
@@ -60,7 +60,7 @@ if [ -z "${PYTHON}" ]; then
 fi
 
 if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
-    printf 'pipeline-ui: 找不到 python3(需要 Python 3.8+)\n' >&2
+    printf 'pipeline-ui: python3 not found (Python 3.8+ is required)\n' >&2
     exit 127
 fi
 
