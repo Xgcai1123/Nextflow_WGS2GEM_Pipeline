@@ -88,6 +88,21 @@ cleanup() {
             echo "---- ${pid} (tail) ----"
             tail -40 "${pid}" | sed 's/^/    /'
         done
+        # The real-engine phases drive Nextflow inside the temp project copy, and
+        # its error block goes to that copy's run.log/.nextflow.log -- never to
+        # the launcher logs above. Without this dump a CI failure reads
+        # "state is done: expected 'done', got 'failed'" with no reason at all,
+        # which is a bisect instead of a diagnosis.
+        for rlog in "${WORK}"/project-real*/.nextflow/ui/runs/*/run.log; do
+            [ -f "${rlog}" ] || continue
+            echo "---- ${rlog} (tail 120) ----"
+            tail -120 "${rlog}" | sed 's/^/    /'
+        done
+        for nflog in "${WORK}"/project-real*/.nextflow.log; do
+            [ -f "${nflog}" ] || continue
+            echo "---- ${nflog} (tail 60) ----"
+            tail -60 "${nflog}" | sed 's/^/    /'
+        done
     fi
     if [ "${UI_CHECK_KEEP:-0}" = "1" ]; then
         echo "  (kept temp workspace: ${WORK})"
