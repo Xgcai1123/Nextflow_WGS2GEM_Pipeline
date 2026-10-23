@@ -1,8 +1,8 @@
 # Project structure (the pipeline only)
 
-Generated from `git ls-files` at commit `971049c` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
+Generated from `git ls-files` at commit `5edf247` by `docs/make_structure.py` -- **regenerate it, do not hand-edit**. Because only tracked files are read, generated artefacts and fetched databases cannot appear below: the "pipeline only" property is structural.
 
-71 tracked files, in the order you would read them:
+81 tracked files, in the order you would read them:
 
 ## The pipeline you run (4 files)
 
@@ -66,6 +66,23 @@ WGSpipeline-nextflow/
     └── quast_html_section.py
 ```
 
+## Local web UI (single user) (7 files)
+
+One python3 process (stdlib only) and one plain-JS page; the browser is a client of the local server, so reads are never uploaded and the UI never deletes anything itself.
+
+```
+WGSpipeline-nextflow/
+├── bin/
+│   └── pipeline-ui
+└── ui/
+    ├── app.js
+    ├── index.html
+    ├── runner.py
+    ├── server.py
+    ├── sheet.py
+    └── style.css
+```
+
 ## Report configuration (2 files)
 
 MultiQC config: the reused one plus the presentation overlay (section order, F21).
@@ -76,7 +93,7 @@ WGSpipeline-nextflow/
 └── multiqc_nextflow.yaml
 ```
 
-## Tests and CI (27 files)
+## Tests and CI (29 files)
 
 Eight local checks and the five-job workflow; nothing here runs tools.
 
@@ -110,6 +127,8 @@ WGSpipeline-nextflow/
         │   │   └── CI_B_2.fastq.gz
         │   ├── reference/
         │   │   └── CI_A.fasta
+        │   ├── ui/
+        │   │   └── fake-nextflow
         │   └── samples.tsv
         ├── README.md
         ├── ci.config
@@ -123,10 +142,11 @@ WGSpipeline-nextflow/
         ├── run-growth-check.sh
         ├── run-lint.sh
         ├── run-preview.sh
-        └── run-stub-smoke.sh
+        ├── run-stub-smoke.sh
+        └── run-ui-check.sh
 ```
 
-## Documentation (13 files)
+## Documentation (14 files)
 
 Entry points (README), the change log, the design record, and this tree.
 
@@ -142,7 +162,8 @@ WGSpipeline-nextflow/
 │   ├── pipeline-summary.html
 │   ├── project-structure.md
 │   ├── project-structure.png
-│   └── roadmap.md
+│   ├── roadmap.md
+│   └── ui.md
 ├── CHANGELOG.md
 ├── LICENSE
 └── README.md
@@ -183,6 +204,7 @@ Every path below is git-ignored. They are the pipeline's *outputs* and its *fetc
 | `data/db/` | Bakta database (4 GB) and BUSCO lineage cache | fetched; see docs/asset-sources.md |
 | `data/reference/` | the optional NCBI reference genomes (step 5b) | fetched |
 | `data/cache/` | persistent caches (AMR guard's known-bad sequences) | regenerable, at ~5 min per sample of rediscovery |
+| `.nextflow/ui/` | local UI runtime state: per-run samples.tsv, run.log, state.json | git-ignored; `pipeline-clean outputs` keeps it (it owns no output), `all` removes it |
 | `results/qc/` | every quality report: FastQC, QUAST, BUSCO, reference comparison | regenerable by re-running |
 | `results/reads/` | trimmed reads | regenerable by re-running |
 | `results/assembly/` | SPAdes assemblies | regenerable by re-running |
