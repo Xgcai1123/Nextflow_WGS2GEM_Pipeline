@@ -28,6 +28,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -421,8 +422,49 @@ def _parse_ps_lines(text):
     return rows
 
 
+# Child processes this server started and has not reaped yet. `subprocess.run`
+# hides the pid, but the busy detector must never mistake our own `nextflow
+# -version` (preflight) for a foreign engine -- that produced a false 409 when
+# the user pressed Start just after the page auto-preflighted (F50).
+_ACTIVE_CHILDREN = set()
+_ACTIVE_CHILDREN_LOCK = threading.Lock()
+
+
+def _active_child_pids():
+    with _ACTIVE_CHILDREN_LOCK:
+        return set(_ACTIVE_CHILDREN)
+
+
+def _register_child(pid):
+    with _ACTIVE_CHILDREN_LOCK:
+        _ACTIVE_CHILDREN.add(int(pid))
+
+
+def _unregister_child(pid):
+    with _ACTIVE_CHILDREN_LOCK:
+        _ACTIVE_CHILDREN.discard(int(pid))
+
+
+def _parse_ps_lines(text, with_ppid=False):
+    rows = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2 if with_ppid else 1)
+        if with_ppid:
+            if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+                continue
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        else:
+            if len(parts) != 2 or not parts[0].isdigit():
+                continue
+            rows.append((int(parts[0]), None, parts[1]))
+    return rows
+
+
 def _ps_table():
-    """[(pid, command)]; ps first, pgrep as the fallback.
+    """[(pid, ppid, command)]; ppid is None when only pgrep is available.
 
     Some restricted environments deny ``ps`` but allow ``pgrep``; both are
     optional (the caller simply sees fewer rows), which matters because this is
@@ -430,11 +472,11 @@ def _ps_table():
     """
     try:
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
+            ["ps", "-axo", "pid=,ppid=,command="],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
         )
         if proc.returncode == 0:
-            return _parse_ps_lines(proc.stdout)
+            return _parse_ps_lines(proc.stdout, with_ppid=True)
     except (OSError, subprocess.SubprocessError):
         pass
     rows = _pgrep_table()
@@ -452,22 +494,89 @@ def _pgrep_table():
         return None
     if proc.returncode not in (0, 1):
         return None
-    return _parse_ps_lines(proc.stdout)
+    return _parse_ps_lines(proc.stdout, with_ppid=False)
+
+
+_NEXTFLOW_EXE_NAMES = frozenset(("nextflow", "fake-nextflow", "nextflow.bat"))
 
 
 def looks_like_nextflow(cmd):
-    """Heuristic used only for *detection* (never for launching)."""
-    low = cmd.lower()
-    if "nextflow" not in low:
+    """Is this command line a *running* engine? Detection only, never launching.
+
+    The project directory is called ``.../WGSpipeline-nextflow``, so "the string
+    nextflow appears somewhere" is not evidence -- a python server, a shell
+    wrapper, or `rm -rf .nextflow/ui` all mention it. Only two shapes count, and
+    either must carry the ``run`` argument, so a one-off ``nextflow -version`` /
+    ``nextflow config -flat`` (the preflight) is never mistaken for a run (F50):
+
+      * an executable whose basename is exactly nextflow / fake-nextflow, incl.
+        ``python .../fake-nextflow run .`` and ``sh -c '... nextflow run .'``;
+      * a JVM launcher: ``nextflow.cli.Launcher``, ``nextflow.jar``, or
+        ``java -jar .../nextflow-<version>-<build>.jar run ...``.
+    """
+    if not cmd or "nextflow" not in cmd.lower():
         return False
+    low = cmd.lower()
     if "ui/server.py" in cmd or "bin/pipeline-ui" in cmd:
         return False
-    if "nextflow.cli" in low or "nextflow.jar" in low:
-        return True
-    if " run " in low or low.rstrip().endswith(" run .") or " run ." in low:
-        return bool(re.search(r"(^|[\s/])[\w.+-]*nextflow[\w.+-]*(\s|$)", cmd))
-    # fake-nextflow used by tests is launched the same way
-    return "fake-nextflow" in low and " run " in low
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        argv = cmd.split()
+    if not argv:
+        return False
+    exe = os.path.basename(argv[0]).lower()
+    if exe in ("sh", "bash", "zsh", "dash") and "-c" in argv:
+        idx = argv.index("-c")
+        if idx + 1 < len(argv):
+            return looks_like_nextflow(argv[idx + 1])
+    launcher = ("nextflow.cli.launcher" in low or "nextflow.jar" in low)
+    if not launcher:
+        # Any argument whose basename is exactly the launcher (covers
+        # `python …/fake-nextflow`, `sh -c 'cd x && nextflow run .'`, and the
+        # conda script itself); `--nextflow /path/nextflow` is harmless because
+        # the "run" requirement below still has to hold.
+        launcher = any(os.path.basename(tok).lower() in _NEXTFLOW_EXE_NAMES
+                       for tok in argv)
+    if not launcher:
+        for i, tok in enumerate(argv):
+            if tok == "-jar" and i + 1 < len(argv):
+                jar = os.path.basename(argv[i + 1]).lower()
+                launcher = jar.endswith(".jar") and "nextflow" in jar
+                break
+    if not launcher:
+        return False
+    return "run" in argv
+
+
+def external_nextflow_pids_from_rows(rows, own_pids):
+    """Pure form of the busy scan so it can be tested without a process table.
+
+    ``own_pids`` are this server's pid, its recorded run pid and every child it
+    spawned; all of their **descendants** are excluded too. Otherwise the
+    ``nextflow -version`` JVM that the page's own preflight starts would look like
+    a foreign run and block the Start button with a 409 (F50).
+    """
+    parent = {pid: ppid for pid, ppid, _cmd in rows if ppid}
+    children = {}
+    for pid, ppid in parent.items():
+        children.setdefault(ppid, []).append(pid)
+    excluded = set(own_pids)
+    stack = list(own_pids)
+    while stack:
+        current = stack.pop()
+        for child in children.get(current, []):
+            if child not in excluded:
+                excluded.add(child)
+                stack.append(child)
+    found = []
+    for pid, _ppid, command in rows:
+        if pid in excluded:
+            continue
+        if looks_like_nextflow(command):
+            found.append(pid)
+    return found
+
 
 
 # ---------------------------------------------------------------------------
@@ -927,11 +1036,14 @@ class RunManager(object):
         with self.lock:
             if self.run and self.run.get("state") == "running":
                 raise BusyError("已有运行正在进行", copy.deepcopy(self.run))
-            external = self.external_nextflow_pids()
-            if external:
+            details = self.external_nextflow_details()
+            if details:
+                shown = "; ".join(
+                    "pid %d (%s)" % (pid, (cmd or "")[:80])
+                    for pid, cmd in details[:3])
                 raise BusyError(
-                    "检测到外部 nextflow 进程 (pid %s),同时运行会争用 work/ 与 results/"
-                    % ", ".join(str(p) for p in external),
+                    "检测到外部 nextflow 进程: %s;同时运行会争用 work/ 与 results/"
+                    % shown,
                     copy.deepcopy(self.run))
             if not (self.nextflow and os.path.isfile(self.nextflow)
                     and os.access(self.nextflow, os.X_OK)):
@@ -1328,7 +1440,7 @@ class RunManager(object):
         cmd = self._pid_command(int(pid))
         if cmd is None:
             return True
-        return "nextflow" in cmd.lower()
+        return looks_like_nextflow(cmd)
 
     def _pid_command(self, pid):
         try:
@@ -1344,7 +1456,7 @@ class RunManager(object):
         rows = _pgrep_table()
         if rows is None:
             return None       # no way to inspect: caller falls back to kill(0)
-        for row_pid, command in rows:
+        for row_pid, _ppid, command in rows:
             if row_pid == int(pid):
                 return command
         return ""             # pid alive but not a nextflow process (pid reuse)
@@ -1357,13 +1469,24 @@ class RunManager(object):
                 own.add(int(run_pid))
             if self.proc is not None:
                 own.add(self.proc.pid)
-        found = []
-        for pid, command in _ps_table():
-            if pid in own:
-                continue
-            if looks_like_nextflow(command):
-                found.append(pid)
-        return found
+        own |= _active_child_pids()
+        return external_nextflow_pids_from_rows(_ps_table(), own)
+
+    def external_nextflow_details(self):
+        """[(pid, command)] for the first few foreign engines (diagnostics only)."""
+        with self.lock:
+            own = {os.getpid()}
+            run_pid = (self.run or {}).get("pid")
+            if run_pid:
+                own.add(int(run_pid))
+            if self.proc is not None:
+                own.add(self.proc.pid)
+        own |= _active_child_pids()
+        rows = _ps_table()
+        found = external_nextflow_pids_from_rows(rows, own)
+        by_pid = {pid: cmd for pid, _ppid, cmd in rows}
+        return [(pid, by_pid.get(pid, "")) for pid in found]
+
 
     # -- shutdown ---------------------------------------------------------
     def shutdown(self, cancel=True):
@@ -1637,16 +1760,34 @@ class RunManager(object):
 # ---------------------------------------------------------------------------
 
 def _run_cmd(argv, timeout=10, cwd=None):
+    """Run a short helper command and keep it in the child registry while alive.
+
+    ``subprocess.run`` would hide the pid; the registry lets the busy detector
+    exclude our own ``nextflow -version`` JVM even where ``ps`` cannot report
+    parent/child relationships (F50).
+    """
     try:
-        proc = subprocess.run(
-            argv, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
-            text=True, errors="replace", timeout=timeout,
+        proc = subprocess.Popen(
+            argv, cwd=cwd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace",
         )
-    except subprocess.TimeoutExpired:
-        return 124, ""
     except OSError as exc:
         return 127, str(exc)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    _register_child(proc.pid)
+    try:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            return 124, ""
+        return proc.returncode, out or ""
+    finally:
+        _unregister_child(proc.pid)
 
 
 def _parse_version(text):
