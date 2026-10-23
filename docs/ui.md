@@ -1,6 +1,6 @@
 # 本地 Web UI（roadmap C）— 设计与契约
 
-状态:**已实现并完成验收**;真实 2 样本全流程在 2026-10-24 跑通(26/26、报告/下载逐字节一致),≤45 min 计时项因主机条件未达成、保留为待复测项(见 §14)。本文件是前后端并行开发的**唯一契约**;
+状态:**已实现并完成验收**(0.3.0:英文界面 + 总进度条 + 状态刷新兜底);真实 2 样本全流程在 2026-10-24 跑通(26/26、报告/下载逐字节一致),≤45 min 计时项因主机条件未达成、保留为待复测项(见 §14)。本文件是前后端并行开发的**唯一契约**;
 实现者先读完本文件再写代码,契约有变更必须先改本文件并在任务板上通知另一端。
 
 定位:**本地单用户 Web UI**,不是公网服务。浏览器打开 `http://127.0.0.1:<port>`,
@@ -411,7 +411,19 @@ data: {"from": 1234, "text": "…原样文本块…"}
 
 ## 11. 前端规格(`ui/index.html` / `app.js` / `style.css`)
 
-单页、中文、离线(禁止任何 `http(s)://` 外链:CSS/JS/字体/图片全部内联或本地)。
+单页、**英文**(2026-10-24 用户要求,0.3.0;API 的用户可见文案同样是英文)、离线
+(禁止任何 `http(s)://` 外链:CSS/JS/字体/图片全部内联或本地)。DOM id / `data-*` 在 0.3.0 保持不变,
+所以既有断言可平移。
+
+**总进度条(0.3.0)**:运行卡片上部 `#overall-progress`(`role="progressbar"`,aria-valuemin/max/now),
+百分比 = completed / expected(clamp 0–100;done 强制 100),caption 形如 `17 / 26 tasks · 65% · 2 running`;
+配 `CURRENT STAGE` 行、终态配色(done 绿 / failed 红 / cancelled 灰)与 `state updated Ns ago` 小字。
+原 12 阶段阶梯与四个计数保留,两者不互相替代。
+
+**刷新兜底(0.3.0,F51)**:主通道仍是 SSE,但 `state` 事件现在在**进度摘要**
+(submitted/completed/failed)变化时也会推送;页面可见时每 5 s 轮询 `/api/state`,hidden 暂停,
+`visibilitychange`/`focus` 立即刷新;SSE state 进入终态后 600 ms 再拉一次;45 s 没有事件则看门狗重连。
+"任务结束后运行模块不更新、后台标签页回来还是旧状态"由此不再依赖单条长连接。
 不使用框架与构建步骤;`app.js` 必须能被 `node --check` 解析。
 
 布局(桌面优先,≥1280px 三栏;窄屏纵向堆叠):
@@ -476,7 +488,7 @@ data: {"from": 1234, "text": "…原样文本块…"}
 
 断言清单(至少):
 
-1. 启动 `--print-url` 输出 `UI_READY`,URL 可访问;`GET /` 200、含中文标题;
+1. 启动 `--print-url` 输出 `UI_READY`,URL 可访问;`GET /` 200、英文页面(`<html lang="en">`、英文 title);
 2. `GET /` 无 token 且无 cookie → 403;带 `?token=` → 200 + `Set-Cookie`;
 3. `index.html`/`app.js`/`style.css` 中无 `http://`/`https://` 外链;`node --check ui/app.js` 通过;
 4. `GET /api/preflight` 返回 checks;nextflow 缺失(`--nextflow /nonexistent`)→ fail 且不崩;
@@ -499,6 +511,10 @@ data: {"from": 1234, "text": "…原样文本块…"}
 16. 鉴权:无 token POST → 403;`Origin: http://evil.example` → 403;
 17. `--project` 指向副本时,仓库真实 `results/` 树 mtime 不变(F18);
 18. 全部 HTTP 响应 `Cache-Control: no-store`(API)。
+19. **0.3.0 新增**:`ui/*.html|js|css` 与 `ui/*.py` 的 CJK 字符数为 0;后端 403/400/preflight/failed 等
+    用户可见文案全英文;页面含 `#overall-progress`/`role="progressbar"`/`aria-valuemin|max|now`,
+    `app.js` 含百分比 clamp 与 `tasks.completed/expected` 渲染;`app.js` 含 `visibilitychange`、window
+    `focus`、5 s `pollState` 轮询、45 s SSE watchdog、终态 600 ms 二次 `refreshState`。
 
 真实集成(CI 有 nextflow 时):用 `--nextflow-arg=-c --nextflow-arg=tests/ci/ci.config
 --nextflow-arg=-stub-run` 跑完整 DAG(约 8 s),断言 done、报告非空、任务计数 25;
@@ -529,11 +545,11 @@ data: {"from": 1234, "text": "…原样文本块…"}
 | 基线对拍 | 全部一致:组装 4,835,534 / 370 / 159,317 / 50.33 与 5,404,919 / 390 / 244,803 / 50.34;BUSCO 440/440;C:100.0%[S:99.5%,D:0.5%];MEMOTE 68.1 / 67.8;生长 0.953 / 0.529、66.000 / 66.001 / 0.000 / 0.228;Bakta 4,891 / 5,496;genome fraction / identity 99.38 / 99.926 与 97.37 / 99.721 |
 | 失败呈现 | 真实 stub DAG 注入 FASTQC 失败 → `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确;无报告 → `failed(report_missing)` |
 | 取消 / attach | 真实运行取消 <1 s、进程组消失、`work/`+`results/` 保留;`kill -9` UI 后 attach 到同 run/pid、完成数从日志恢复、仍可取消(真实 Nextflow 与假引擎两条路径) |
-| 自动化守卫 | `tests/ci/run-ui-check.sh`:**282 ok / 0 FAIL / 0 SKIP**,42 s(含真实 stub DAG 25 任务、注入失败与 F50 忙检测单测) |
+| 自动化守卫 | `tests/ci/run-ui-check.sh`:**318 ok / 0 FAIL / 0 SKIP**,39 s(含真实 stub DAG 25 任务、注入失败、F50 忙检测单测,以及 0.3.0 的英文/进度条/刷新兜底断言) |
 | F18 | 仓库 `results/`、`data/`、tracked `samples.tsv` 在测试中零改动 |
 
 
-![2026-10-24 真实 2 样本验收:26/26、exit 0、12 步全绿、右侧为真实 15.4 MiB MultiQC 报告(iframe)](ui-acceptance.png)
+![2026-10-24 英文界面(0.3.0)下的真实运行:1 样本 13/13、exit 0、进度条 100%、当前阶段 Finished,右侧为真实 MultiQC 报告(iframe)](ui-acceptance.png)
 
 ### 14.3 45 分钟口径:未达成,原因已分清
 

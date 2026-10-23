@@ -55,7 +55,11 @@ assertion. They are independent and can be run in any order.
   0.3 s, `run-clean-check.sh` 0.4 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s,
   `run-growth-check.sh` 12 s, `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s,
   `run-preview.sh` 33 s.
-- `run-ui-check.sh` is the newest member: 282 assertions, 42 s. It deliberately owns **no output tree**: every
+- `run-ui-check.sh` is the newest member: 318 assertions, 39 s. Its 0.3.0 additions pin the English
+  interface (CJK count 0 in html/js/css and in ui/*.py, English API messages), the overall progress
+  bar (element, aria range, percentage clamp) and the state-refresh fallbacks (5 s poll,
+  visibilitychange/focus, 45 s SSE watchdog, terminal re-fetch) so the run panel cannot depend on a
+  single long-lived connection alone. It deliberately owns **no output tree**: every
   scenario builds a `mktemp -d` project, and the real stub leg copies the pipeline into one, so a UI regression
   cannot publish over validated data (F18). The `SKIP` it prints when `nextflow` is absent is a skip, not a pass —
   the new `local-ui` CI job installs Nextflow so the stub leg always runs there.

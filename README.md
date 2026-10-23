@@ -155,7 +155,12 @@ needs. Everything else is the pipeline you already have: the UI writes a sample 
 The flow is this README's flow with the file picker replaced by the local filesystem: choose
 R1/R2 in the built-in browser (**reads are never uploaded** — the page lists paths server-side),
 pick *resume* or *fresh*, press start, watch the 12-process ladder and the engine log stream in,
-then load the report. `bin/pipeline-clean` remains the only thing that deletes: ticking "clear
+then load the report. The interface is **English**, and the run panel is built to stay honest
+while it is open: an overall progress bar (completed / expected tasks, current stage, terminal
+state colour) is driven by SSE events that now carry a progress digest, backed by a 5 s poll while
+the tab is visible, a refresh on focus, a re-fetch after the run turns terminal, and a 45 s SSE
+watchdog — so a background tab that missed the end of a 38-minute run cannot come back showing
+"Running". `bin/pipeline-clean` remains the only thing that deletes: ticking "clear
 outputs" shows its `check` plan first and runs `outputs --yes` only after confirmation, so the
 UI never becomes a second cleanup implementation.
 
@@ -469,7 +474,7 @@ version is declared once, in the `manifest` block of `nextflow.config`:
 ```groovy
 manifest {
     name            = 'NextFlow-WGS2GEM'
-    version         = '0.2.1'
+    version         = '0.3.0'
     nextflowVersion = '>=25.10.0'
 }
 ```

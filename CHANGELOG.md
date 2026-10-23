@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-24
+
+### Added
+
+- **An English interface and an overall progress bar (user feedback).** The console was Chinese-only and
+  its progress was implicit: four counters plus a 12-process ladder, no single "where is the run".
+  Everything user-visible is now English — page chrome, labels, hints, dialogs, and the API's
+  validation/preflight/failure messages (the existing DOM ids and JSON keys are unchanged, so the
+  contract and the test suite carried over). Above the ladder there is now an overall progress bar
+  (`#overall-progress`, ARIA progressbar) with `completed / expected` percentage, a caption such as
+  `17 / 26 tasks · 65% · 2 running`, the current stage, terminal-state colouring (done green, failed
+  red with the failing stage, cancelled grey) and a `state updated Ns ago` marker; the ladder and the
+  four counters stay as the per-step/per-sample detail.
+
+### Changed
+
+- **SSE `state` events now carry a progress digest.** The server used to emit state only when the run
+  id or the state *name* changed, so during a 38-minute run the page's counters, ladder and progress
+  sat on the first frame and only jumped when the run finished; a background tab could also come back
+  showing a stale `Running`. The event is now re-sent whenever `submitted/completed/failed` moves (26
+  tasks = 26 small events per run).
+- **The run panel no longer depends on one long-lived connection.** While the tab is visible the page
+  polls `GET /api/state` every 5 s (paused when hidden), refreshes immediately on `visibilitychange`
+  and `focus`, re-fetches 600 ms after a terminal SSE state (so the report/exit code are complete), and
+  a 45 s SSE watchdog closes and reconnects when nothing has arrived.
+
+### Fixed
+
+- **"The Run module does not update after the task ends."** Root cause was the event model above, not
+  rendering: progress was pushed at state-machine granularity (F51). The fixes above make the bar move
+  per task and make the page converge after sleep/reconnect; verified with the fake engine
+  (8%→…→100%, `54%` while running, `100% · Finished`, `38% · failed at SPADES`) and with a kill -9 /
+  restart of the UI server while a run was in flight (the un-refreshed page recovered to `Running`,
+  `Log stream connected`, elapsed 00:33).
+- **`bin/pipeline-ui` printed three Chinese errors** (missing server file / wrong directory / missing
+  python3); it is English now, like the rest of the interface.
+
+### Verification
+
+`tests/ci/run-ui-check.sh`: **318 ok / 0 FAIL / 0 SKIP in 39 s** (was 282), including 36 new assertions
+for English-only pages and Python messages, the progress-bar element/aria/clamp, and the four refresh
+fallbacks; the real `-stub-run` DAG and the injected-FASTQC failure leg still pass.
+
 ## [0.2.1] - 2026-10-24
 
 ### Fixed
