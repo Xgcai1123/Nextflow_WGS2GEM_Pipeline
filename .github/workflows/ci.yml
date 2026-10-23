@@ -94,6 +94,24 @@ jobs:
       - name: Inject a failing sample; verify loud failure + -resume convergence
         run: bash tests/ci/run-failure-isolation.sh
 
+  local-ui:
+    name: local web UI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NEXTFLOW_VERSION }}
+          java-version: '21'
+      # The contract assertions are driven by a programmable fake engine
+      # (tests/ci/fixtures/ui/fake-nextflow); the stub-DAG leg needs the real
+      # Nextflow but still no conda, no tools and no output tree.
+      - name: Run the UI against the fake engine and the stub DAG
+        run: bash tests/ci/run-ui-check.sh
+
   growth-validation:
     name: defined-medium growth check
     runs-on: ubuntu-latest

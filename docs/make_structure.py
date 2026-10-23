@@ -32,7 +32,12 @@ GROUPS = [
      lambda p: p.startswith("media/")),
     ("helpers", "Helper programs called by tasks",
      "Python/bash helpers the processes invoke; the reused ones are byte-identical (D4).",
-     lambda p: p.startswith("scripts/") or p.startswith("bin/")),
+     lambda p: (p.startswith("scripts/") or p.startswith("bin/"))
+               and p != "bin/pipeline-ui"),
+    ("ui", "Local web UI (single user)",
+     "One python3 process (stdlib only) and one plain-JS page; the browser is a client of the "
+     "local server, so reads are never uploaded and the UI never deletes anything itself.",
+     lambda p: p.startswith("ui/") or p == "bin/pipeline-ui"),
     ("report", "Report configuration",
      "MultiQC config: the reused one plus the presentation overlay (section order, F21).",
      lambda p: p.startswith("multiqc_")),
@@ -65,6 +70,8 @@ UNTRACKED = [
     ("data/reference/", "the optional NCBI reference genomes (step 5b)", "fetched"),
     ("data/cache/", "persistent caches (AMR guard's known-bad sequences)",
      "regenerable, at ~5 min per sample of rediscovery"),
+    (".nextflow/ui/", "local UI runtime state: per-run samples.tsv, run.log, state.json",
+     "git-ignored; `pipeline-clean outputs` keeps it (it owns no output), `all` removes it"),
     ("results/qc/", "every quality report: FastQC, QUAST, BUSCO, reference comparison",
      "regenerable by re-running"),
     ("results/reads/", "trimmed reads", "regenerable by re-running"),

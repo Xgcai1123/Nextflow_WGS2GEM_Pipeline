@@ -7,8 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 ### Added
 
+- **A local web UI for one run at a time — `bin/pipeline-ui` (roadmap C).** The pipeline was
+  usable only from a shell, so "run it, watch it, read the report" meant keeping a terminal open
+  and knowing which of a dozen paths to open afterwards. The new interface is deliberately
+  **local and single-user**: it binds `127.0.0.1`, serves one page, and owns exactly one
+  `nextflow run` at a time. It is not a hosted service — the three questions that decide such a
+  project (who maintains the 4 GB reference databases, who pays for the 8 cores, who carries the
+  pathogen-data compliance) have no answer here, and BV-BRC/KBase already occupy that space.
+  - **An operator shell, not a second pipeline.** It does not validate biology, does not delete
+    anything and does not render its own report. Sample-sheet authority stays in `main.nf` (the
+    UI writes the same six columns and passes `--samples_tsv`), deletion authority stays in
+    `bin/pipeline-clean` (ticking "clear outputs" shows its `check` plan first and runs
+    `outputs --yes` only after confirmation), and presentation authority stays in MultiQC (the
+    real self-contained 15 MB report in an iframe, plus the real `results/` tree as a streamed
+    tar.gz). Reads are chosen with a **server-side file browser**, so a 400 MB FASTQ is never
+    uploaded through the browser.
+  - **State comes from the engine, never from a guess.** Progress is the engine's own
+    `[hash] Submitted|Completed process > NAME (tag)` lines, rendered as a 12-process x N-sample
+    ladder plus a live log (SSE, replayable from a byte offset); the report path comes from the
+    `onComplete` line, with the resolved config and a glob as fallbacks. Expected tasks are
+    `11*N + references + 2` — 26 for the validated two-sample cohort. A run that exits 0 without
+    writing a report is **`failed(report_missing)`**, never a green check; a failed task is shown
+    with its process, sample, exit code, work directory and stderr tail, and can be retried with
+    `-resume`.
+  - **Survivable operation.** Cancel sends SIGTERM to the process group (10 s, then SIGKILL) and
+    keeps `work/`, so the run stays resumable; it is a distinct state from failure. The engine is
+    spawned in its own session with its output on disk, so killing the UI mid-run is not fatal: a
+    restarted UI **attaches** to the live run, keeps streaming its log, and can still cancel it.
+    The security boundary is boring on purpose — one-shot token in the printed URL, `Origin`
+    check, no generic static-file serving, no upload endpoint.
+  - **Verification.** `tests/ci/run-ui-check.sh` (new `local-ui` CI job) is 265 assertions in
+    35–47 s: a programmable fake engine covers fail-on-demand, hang-until-cancelled and
+    exit-0-without-report; one leg runs the real `-stub-run` DAG (25 tasks, `done`); an injected
+    FASTQC failure is parsed into `FASTQC_RAW / CI_B_1 / exit 1`; seven malformed payloads are
+    each rejected with row+field and **no spawn**; SSE replay is byte-identical; the results
+    tarball is compared file by file; cancellation from an attached run is asserted end to end
+    after killing and restarting the UI; and the repository's `results/` and `data/` are proven
+    untouched (F18). Three mutation negative controls make the suite fail (always-true token,
+    noreport treated as done, cancel without killing the process group). Design contract and
+    decisions: `docs/ui.md` (UI-D1..D12, D26). Measured end-to-end acceptance (2026-10-24): the UI drove the real two-sample cohort
+    from a cleaned tree to the report. **26/26 tasks, exit 0, 77.5 minutes** (00:33:50 ->
+    01:51:21 +0800) on an 8-core host with only **8 GiB of RAM**, swap 3.3-4.8 GiB in use
+    and loadavg 3.4 rising to 24.1. Every number matched the 0.1.0 baseline: assembly
+    4,835,534 bp / 370 contigs / N50 159,317 / GC 50.33 and 5,404,919 / 390 / 244,803 /
+    50.34; BUSCO 440/440 (C:100.0% [S:99.5%, D:0.5%]); MEMOTE 68.1 / 67.8; growth
+    0.953 h-1 / 0.529 g g-1 with 66.000 / 0.001 / 0.000 / 0.228; Bakta 4,891 / 5,496 rows;
+    genome fraction 99.38 / identity 99.926 and 97.37 / 99.721. The 16,150,251-byte report
+    was served byte-identically and rendered in the iframe, and the 350 MiB results tarball
+    round-tripped **69/69 files**, with the QUAST table and the report byte-identical after
+    extraction. The **<=45 min** figure was **not** met on this host (77.5 min); that is the
+    F42 condition rather than the UI -- the run is the same 26-task DAG that takes ~38 min on
+    an idle host -- so the timing criterion stays open, with the reproduction procedure in
+    roadmap C and docs/ui.md section 14. In a first attempt on the same night the host was in
+    a worse state (loadavg up to 24.1, swap 7.1 GiB) and the run was cancelled at 67.9 min /
+    10 of 26 tasks; that attempt is what proved the real-run cancel and kill/restart attach
+    paths.
 - **`bin/pipeline-clean` — one cleanup command with three explicit blast radii.** "Clean up" meant
   three different things and the repository only offered `rm -rf`, so the expensive thing and the
   big thing had to be paid for together: `results/` is 434 MiB and ~38 minutes of compute,
@@ -190,6 +247,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/ci/README.md`.
 
 ### Fixed
+
+- **The local UI showed "0 completed" for the whole run because it read task completion from the wrong
+  stream (F48).** Real Nextflow 26.10.0 prints only `Submitted process > …` to stdout; task completion is
+  a DEBUG line in the project's `.nextflow.log`
+  (`Task completed > TaskHandler[id: N; name: NAME (tag); status: COMPLETED; exit: 0; …]`). The first
+  version parsed stdout only, so the 2026-10-23 acceptance run was 18.6 minutes and 10 completed tasks in
+  while the UI still said `completed=0` — the fake engine, which printed `Completed process >` itself, had
+  kept all 237 assertions green. The UI now tails `.nextflow.log` as the completion source (fresh runs start
+  at the current end of the file; a rotation or truncation resets to 0; attach and terminal restore replay
+  from the beginning), keeps accepting the stdout form for the fake/older engines, and both sources are
+  covered by tests. Verified live: after `kill -9`ing the UI and restarting, the attached run reported
+  `completed=10` with SPAdes still running, on the same run id and pid.
 
 - **BAKTA had been broken since the F33 change, and a clean re-run finally said so.** F33 moved the
   AMR-guard cache from `db/amr_guard/` to `data/cache/amr_guard/` by adding
@@ -505,5 +574,6 @@ WGS-to-GEM pipeline.
 - **Requires Nextflow ≥ 25.10** (strict syntax and the `onComplete:` section syntax used
   by this pipeline).
 
-[Unreleased]: https://github.com/MeMoModelling/NextFlow-WGS2GEM/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MeMoModelling/NextFlow-WGS2GEM/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MeMoModelling/NextFlow-WGS2GEM/releases/tag/v0.2.0
 [0.1.0]: https://github.com/MeMoModelling/NextFlow-WGS2GEM/releases/tag/v0.1.0

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# ============================================================
+# bin/pipeline-ui -- start the local Web UI for NextFlow-WGS2GEM.
+#
+#   bin/pipeline-ui [options]        (see ui/server.py --help)
+#
+# The launcher exists for one reason: the UI must run on the *user's* python3,
+# and it has to find its own sources when invoked through a symlink or from
+# another directory.  Everything else -- port selection, the single-instance
+# fcntl.flock, nextflow resolution, the token, server.json, the browser -- is
+# done by ui/server.py, which this script execs (contract docs/ui.md §3).
+#
+#   --project DIR   project root (must contain main.nf + nextflow.config)
+#   --port N        default 8787; busy -> +1 up to 20 tries; 0 = system-assigned
+#   --host IP       default 127.0.0.1; non-loopback prints a warning
+#   --nextflow PATH engine; default PATH then ~/miniforge3/envs/nextflow/bin
+#   --token TOK     fixed token (tests) instead of a random one
+#   --no-open       do not open a browser
+#   --print-url     print one `UI_READY {json}` line, then block
+#   --nextflow-arg  repeatable; appended to the `nextflow run` command line
+#   --help
+#
+# Exit codes: 0 normal shutdown, 1 already running / bad project / no port,
+# 127 python3 not found.  There are no third-party dependencies.
+# ============================================================
+
+set -uo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_PATH}" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_PATH}")" && pwd)"
+    SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"
+    case "${SCRIPT_PATH}" in
+        /*) ;;
+        *) SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}" ;;
+    esac
+done
+PROJECT_SOURCE="$(cd -P "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
+SERVER_PY="${PROJECT_SOURCE}/ui/server.py"
+
+if [ ! -f "${SERVER_PY}" ]; then
+    printf 'pipeline-ui: 找不到 %s\n' "${SERVER_PY}" >&2
+    printf 'pipeline-ui: 请在仓库检出的 bin/ 目录下运行本脚本\n' >&2
+    exit 1
+fi
+
+# Resolve python3 without touching the user's shell profile: interactive zsh
+# activates conda, a non-interactive bash does not (see SKILL.md toolchain).
+PYTHON="${UI_PYTHON:-}"
+if [ -z "${PYTHON}" ]; then
+    if [ -n "${CONDA_PREFIX:-}" ] && [ -x "${CONDA_PREFIX}/bin/python3" ]; then
+        PYTHON="${CONDA_PREFIX}/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON="$(command -v python3)"
+    elif [ -x /usr/bin/python3 ]; then
+        PYTHON=/usr/bin/python3
+    elif [ -x /usr/local/bin/python3 ]; then
+        PYTHON=/usr/local/bin/python3
+    fi
+fi
+
+if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
+    printf 'pipeline-ui: 找不到 python3(需要 Python 3.8+)\n' >&2
+    exit 127
+fi
+
+exec "${PYTHON}" "${SERVER_PY}" "$@"
