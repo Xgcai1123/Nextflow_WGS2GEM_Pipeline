@@ -1,6 +1,6 @@
 # 本地 Web UI（roadmap C）— 设计与契约
 
-状态:**已实现并通过自动化验收**;真实全量 2 样本计时验收在 2026-10-23 的主机条件下被中止(原因与复测方法见 §14)。本文件是前后端并行开发的**唯一契约**;
+状态:**已实现并完成验收**;真实 2 样本全流程在 2026-10-24 跑通(26/26、报告/下载逐字节一致),≤45 min 计时项因主机条件未达成、保留为待复测项(见 §14)。本文件是前后端并行开发的**唯一契约**;
 实现者先读完本文件再写代码,契约有变更必须先改本文件并在任务板上通知另一端。
 
 定位:**本地单用户 Web UI**,不是公网服务。浏览器打开 `http://127.0.0.1:<port>`,
@@ -513,32 +513,31 @@ data: {"from": 1234, "text": "…原样文本块…"}
 4. 取消后 `work/` 保留、续跑收敛;435 MB 下载解包清单与 `results/` 一致。
 5. 冷启动(conda 环境不存在)单独计时并如实记录,不混入 45 min 口径。
 
-### 14.2 实测结果
-
-**已通过(证据在 `tests/ci/run-ui-check.sh` 与本次运行快照)**
+### 14.2 实测结果(2026-10-24,真实 2 样本,经 UI 从"清空产物"起)
 
 | 项 | 结果 |
 |---|---|
-| 自动化断言 | **237 ok / 0 FAIL / 0 SKIP**,35–47 s(含真实 stub 全 DAG 25 任务 + 注入失败) |
-| 注入失败 | `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确 |
-| 无报告 | `exit 0` 无报告 → `failed(report_missing)`,不显示绿勾 |
-| 取消(真实运行) | 26 任务的真实运行,UI 取消后 **<1 s** 进入 `cancelled`;java 进程组消失;`work/`(655 MB)与 `results/`(328 MB)保留 |
-| attach(真实运行) | 运行中 `kill -9` UI → 重启后 attach 到**同一 run id / 同一 pid**,`completed` 从 0 恢复为 10,日志继续流入;并可取消 |
-| 真实结果下载 | `GET /api/download?what=results` → 324 MiB tar.gz,6 s;解包后文件清单与 `results/` 逐文件一致,`trace.tsv` 往返**逐字节相同** |
-| 清空 | UI 勾选"清空产物" → `pipeline-clean outputs --yes` 删除 13 条路径、回收 1.74 GiB,输入前后盘点一致 |
+| 全流程 | **26/26 任务,exit 0,77.5 分钟**(00:33:50 → 01:51:21 +0800),UI 终态 `done` |
+| 主机 | 8 核、**8 GiB RAM**;loadavg 3.35 → 24.1(峰值)→ 6.65;swap 3.3–4.8 GiB(验收计时必须附负载,F42) |
+| 清空 | `pipeline-clean outputs --yes`:13 条路径、1.74 GiB,输入前后盘点一致 |
+| 报告 | 16,150,251 B;`/api/report` 与文件**逐字节一致**;iframe 渲染真实 MultiQC 页面(含内嵌 MEMOTE/QUAST),截图 `/tmp/attempt2-report.png` |
+| 下载 | 350 MiB `results` tar.gz,27.6 s;**69/69 文件逐文件一致**;解包后 QUAST `report.tsv` 与 15.4 MiB 报告**逐字节相同** |
+| 基线对拍 | 全部一致:组装 4,835,534 / 370 / 159,317 / 50.33 与 5,404,919 / 390 / 244,803 / 50.34;BUSCO 440/440;C:100.0%[S:99.5%,D:0.5%];MEMOTE 68.1 / 67.8;生长 0.953 / 0.529、66.000 / 66.001 / 0.000 / 0.228;Bakta 4,891 / 5,496;genome fraction / identity 99.38 / 99.926 与 97.37 / 99.721 |
+| 失败呈现 | 真实 stub DAG 注入 FASTQC 失败 → `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确;无报告 → `failed(report_missing)` |
+| 取消 / attach | 真实运行取消 <1 s、进程组消失、`work/`+`results/` 保留;`kill -9` UI 后 attach 到同 run/pid、完成数从日志恢复、仍可取消(真实 Nextflow 与假引擎两条路径) |
+| 自动化守卫 | `tests/ci/run-ui-check.sh`:**265 ok / 0 FAIL / 0 SKIP**,37 s(含真实 stub DAG 25 任务与注入失败) |
 | F18 | 仓库 `results/`、`data/`、tracked `samples.tsv` 在测试中零改动 |
 
-**未完成 / 不宣称**
+### 14.3 45 分钟口径:未达成,原因已分清
 
-| 项 | 状态与原因 |
-|---|---|
-| ≤45 min 全流程 | **未验证**。2026-10-23 22:36:55 起跑,到 23:44:49 仍停在 SPADES(#1),完成 10/26 个任务后人工取消(67.9 min)。主机:**8 GiB RAM**,swap 已用 3.8–7.1 GiB,loadavg 起跑 2.22 → 运行中 9.7–24.1(8 核)。SPADES 的单线程 K-mer 图构建阶段被饿死(与 F42 同一签名);管线本身无报错、发布物正常。**这不是 UI 缺陷,也不是管线缺陷,是主机条件**。 |
-| 真实 15 MB 报告 iframe | **未验证**:运行未到 MULTIQC。懒加载路径、字节转发与 iframe 渲染已在假报告上验证(`/api/report` 字节==文件)。 |
-| 基线数字对拍 | **未做**:运行未完成。基线仍以 roadmap B 与 CHANGELOG 0.1.0 为准。 |
+同一套 26 任务 DAG 的空载基线是 38 分钟;本次实跑 77.5 分钟。差别不在 UI(UI 只是 spawn 了同一条
+`nextflow run .`,任务数、产物、数字全部与基线一致),而在**主机**:8 GiB RAM 上 swap 被占用
+3.3–4.8 GiB、loadavg 峰值 24.1(8 核),SPADES 的单线程 K-mer 图构建阶段被饿死 —— 与 F42 同一签名。
+本次也未能复现空载条件,**因此不宣称 ≤45 分钟**,而是把它留作可复测的验收项。
 
-**复测方法(下一轮,空闲主机)**:关闭浏览器/微信/Spotify 等重负载应用,确认 `vm.loadavg` 1-min < 4、
-swap 基本为 0;`bin/pipeline-ui` → 勾选"清空产物" → 选 `data/raw` 两个样本 + `data/reference` 参考 →
-记录起止时间、`vm.loadavg`、`sysctl vm.swapusage`;跑完点"加载报告"并下载 `results/` 核对文件清单。
+**复测方法**:关闭重负载应用,确认 `vm.loadavg` 1-min <4 且 `sysctl vm.swapusage` 基本为 0;从
+`bin/pipeline-ui` 起、勾选"清空产物"、选两个 FASTQ + 参考,记录起止时间、loadavg、swap;预期 ≤45 分钟。
+同一晚的更差状态下曾有一次 67.9 min/10 任务的人工中止(F49),那一轮验证的是取消与 attach。
 
 **冷启动口径**:本机 conda 环境 8/8 已构建;首次运行构建 8 个环境约 5.7 GiB 下载,预检会 warn,不计入 45 min。
 

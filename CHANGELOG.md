@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-23
+## [0.2.0] - 2026-10-24
 
 ### Added
 
@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     restarted UI **attaches** to the live run, keeps streaming its log, and can still cancel it.
     The security boundary is boring on purpose — one-shot token in the printed URL, `Origin`
     check, no generic static-file serving, no upload endpoint.
-  - **Verification.** `tests/ci/run-ui-check.sh` (new `local-ui` CI job) is 237 assertions in
+  - **Verification.** `tests/ci/run-ui-check.sh` (new `local-ui` CI job) is 265 assertions in
     35–47 s: a programmable fake engine covers fail-on-demand, hang-until-cancelled and
     exit-0-without-report; one leg runs the real `-stub-run` DAG (25 tasks, `done`); an injected
     FASTQC failure is parsed into `FASTQC_RAW / CI_B_1 / exit 1`; seven malformed payloads are
@@ -49,17 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     after killing and restarting the UI; and the repository's `results/` and `data/` are proven
     untouched (F18). Three mutation negative controls make the suite fail (always-true token,
     noreport treated as done, cancel without killing the process group). Design contract and
-    decisions: `docs/ui.md` (UI-D1..D12, D26). Measured end-to-end acceptance (2026-10-23): the UI
-    drove a real two-sample run from a cleaned tree — the clear step (13 paths, 1.74 GiB, inputs
-    re-inventoried unchanged), 10 real tasks completed, a real cancel (<1 s, process group gone,
-    `work/` kept), an attach after `kill -9`ing the UI mid-run (same run id and pid, completed count
-    restored from 0 to 10, still cancellable), and a 324 MiB results tarball whose file list matched
-    the tree after extraction (`trace.tsv` byte-identical on the round trip). The **≤45 min** figure
-    was **not** reached and is not claimed: the host has 8 GiB of RAM and ran at loadavg 9.7–24.1 with
-    3.8–7.1 GiB of swap in use, which starves the single-threaded phase of SPAdes (the F42 signature);
-    the run was stopped at 67.9 min at 10/26 tasks. That timing leg and the real 15 MB report iframe
-    stay open, with the reproduction procedure written down (roadmap C, `docs/ui.md` §14); the report
-    path, byte-identical transfer and lazy iframe are covered by the fake engine and the real stub DAG.
+    decisions: `docs/ui.md` (UI-D1..D12, D26). Measured end-to-end acceptance (2026-10-24): the UI drove the real two-sample cohort
+    from a cleaned tree to the report. **26/26 tasks, exit 0, 77.5 minutes** (00:33:50 ->
+    01:51:21 +0800) on an 8-core host with only **8 GiB of RAM**, swap 3.3-4.8 GiB in use
+    and loadavg 3.4 rising to 24.1. Every number matched the 0.1.0 baseline: assembly
+    4,835,534 bp / 370 contigs / N50 159,317 / GC 50.33 and 5,404,919 / 390 / 244,803 /
+    50.34; BUSCO 440/440 (C:100.0% [S:99.5%, D:0.5%]); MEMOTE 68.1 / 67.8; growth
+    0.953 h-1 / 0.529 g g-1 with 66.000 / 0.001 / 0.000 / 0.228; Bakta 4,891 / 5,496 rows;
+    genome fraction 99.38 / identity 99.926 and 97.37 / 99.721. The 16,150,251-byte report
+    was served byte-identically and rendered in the iframe, and the 350 MiB results tarball
+    round-tripped **69/69 files**, with the QUAST table and the report byte-identical after
+    extraction. The **<=45 min** figure was **not** met on this host (77.5 min); that is the
+    F42 condition rather than the UI -- the run is the same 26-task DAG that takes ~38 min on
+    an idle host -- so the timing criterion stays open, with the reproduction procedure in
+    roadmap C and docs/ui.md section 14. In a first attempt on the same night the host was in
+    a worse state (loadavg up to 24.1, swap 7.1 GiB) and the run was cancelled at 67.9 min /
+    10 of 26 tasks; that attempt is what proved the real-run cancel and kill/restart attach
+    paths.
 - **`bin/pipeline-clean` — one cleanup command with three explicit blast radii.** "Clean up" meant
   three different things and the repository only offered `rm -rf`, so the expensive thing and the
   big thing had to be paid for together: `results/` is 434 MiB and ~38 minutes of compute,
