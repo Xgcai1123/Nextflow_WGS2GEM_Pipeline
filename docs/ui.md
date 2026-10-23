@@ -134,6 +134,10 @@ done / failed / cancelled / interrupted ──POST /api/run──> running(新 r
 
 - `running` 期间再次 `POST /api/run` → **409**;`POST /api/cancel` 对 UI **拥有或 attach** 的
   运行有效(按 `state.json` 记录的 pid 进程组 kill;机器上不是 UI 启动的 nextflow 只检测、不杀)。
+- **忙检测的判据(0.2.1/F50)**:只把"basename 恰为 `nextflow`/`fake-nextflow`(含 `sh -c` 包装)或
+  JVM 带 `nextflow.cli.Launcher`/`nextflow.jar`/`-jar nextflow-*.jar`、**且 argv 含 `run`**"的进程算作引擎;
+  `nextflow -version`/`config -flat` 天然不匹配。扫描排除本进程的**全部后代**与 `_run_cmd` 登记的存活子进程,
+  所以页面自己的预检 JVM 不会把"开始运行"挡成 409;`409` 文案会带 pid 与命令行前 80 字符。
 - 启动时读 `state.json`:state=running 且 pid 存活且 argv 里含 nextflow → **attach**
   (状态仍 running,从 `run.log` 头部重放解析);pid 已死 → `interrupted`,附原因
   "上次运行在 UI 退出后结束/被杀,请用 -resume 续跑"。
@@ -525,7 +529,7 @@ data: {"from": 1234, "text": "…原样文本块…"}
 | 基线对拍 | 全部一致:组装 4,835,534 / 370 / 159,317 / 50.33 与 5,404,919 / 390 / 244,803 / 50.34;BUSCO 440/440;C:100.0%[S:99.5%,D:0.5%];MEMOTE 68.1 / 67.8;生长 0.953 / 0.529、66.000 / 66.001 / 0.000 / 0.228;Bakta 4,891 / 5,496;genome fraction / identity 99.38 / 99.926 与 97.37 / 99.721 |
 | 失败呈现 | 真实 stub DAG 注入 FASTQC 失败 → `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确;无报告 → `failed(report_missing)` |
 | 取消 / attach | 真实运行取消 <1 s、进程组消失、`work/`+`results/` 保留;`kill -9` UI 后 attach 到同 run/pid、完成数从日志恢复、仍可取消(真实 Nextflow 与假引擎两条路径) |
-| 自动化守卫 | `tests/ci/run-ui-check.sh`:**265 ok / 0 FAIL / 0 SKIP**,37 s(含真实 stub DAG 25 任务与注入失败) |
+| 自动化守卫 | `tests/ci/run-ui-check.sh`:**282 ok / 0 FAIL / 0 SKIP**,42 s(含真实 stub DAG 25 任务、注入失败与 F50 忙检测单测) |
 | F18 | 仓库 `results/`、`data/`、tracked `samples.tsv` 在测试中零改动 |
 
 

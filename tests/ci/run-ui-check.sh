@@ -662,24 +662,22 @@ external_engine_procs() {
     # a shell whose command line merely mentions "nextflow" (e.g. `rm -rf
     # .nextflow/ui`) is not an engine. ui/server.py / bin/pipeline-ui are
     # excluded there too -- they merely *hold* a nextflow path in their argv.
-    pgrep -fl 'nextflow' 2>/dev/null | grep -v -F "${WORK}" | python3 - <<'PYENGINE' || true
-import re, sys
+    pgrep -fl 'nextflow' 2>/dev/null | grep -v -F "${WORK}" | PROJECT_DIR="${PROJECT_DIR}" python3 - <<'PYENGINE' || true
+# Use the code under test instead of a copy of the heuristic: a drifted mirror is
+# how a "nextflow -version" JVM became a false 409 (F50). The classifier is pure
+# and importing ui/runner.py starts nothing.
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["PROJECT_DIR"], "ui"))
+try:
+    import runner
+except Exception:
+    sys.exit(0)
 for line in sys.stdin:
     line = line.rstrip()
+    if not line:
+        continue
     _pid, _, cmd = line.partition(" ")
-    low = cmd.lower()
-    if "nextflow" not in low:
-        continue
-    if "ui/server.py" in cmd or "bin/pipeline-ui" in cmd:
-        continue
-    if "nextflow.cli" in low or "nextflow.jar" in low:
-        print(line)
-        continue
-    if " run " in low or low.rstrip().endswith(" run .") or " run ." in low:
-        if re.search(r"(^|[\s/])[\w.+-]*nextflow[\w.+-]*(\s|$)", cmd):
-            print(line)
-        continue
-    if "fake-nextflow" in low and " run " in low:
+    if runner.looks_like_nextflow(cmd):
         print(line)
 PYENGINE
 }
@@ -754,6 +752,74 @@ PY
 # ===========================================================================
 # 1. launcher, auth, static serving, preflight, shell of the API (§13.1-4,16,18)
 # ===========================================================================
+phase_busy_detection() {
+    banner "busy detection: strict classifier + own descendants (F50)"
+    cat > "${WORK}/busy_unit.py" <<'PYUNIT'
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["PROJECT_DIR"], "ui"))
+import runner
+
+FAILS = 0
+
+def check(label, ok):
+    global FAILS
+    print(("OK " if ok else "FAIL ") + label)
+    if not ok:
+        FAILS += 1
+
+CASES = [
+    ("python3 /x/ui/server.py --project /x/WGSpipeline-nextflow --nextflow /y/bin/nextflow",
+     False, "our own server (project path + --nextflow)"),
+    ("bash /x/bin/pipeline-ui --port 0", False, "our own launcher"),
+    ("bash -c sleep 3 /x/WGSpipeline-nextflow run", False,
+     "shell that merely mentions the checkout and 'run'"),
+    ("rm -rf /x/WGSpipeline-nextflow/.nextflow/ui", False, "cleanup mentioning the checkout"),
+    ("java -jar /x/nextflow-26.10.0-14055.jar -version", False,
+     "preflight nextflow -version JVM"),
+    ("nextflow -version", False, "bare nextflow -version"),
+    ("nextflow config -flat", False, "nextflow config -flat"),
+    ("/x/bin/nextflow run . --samples_tsv s.tsv", True, "the conda launcher for a run"),
+    ("python3 /x/tests/ci/fixtures/ui/fake-nextflow run .", True, "the fake engine for a run"),
+    ("/usr/bin/java -jar /x/nextflow-26.10.0-14055.jar run .", True, "the real engine JVM"),
+    ("/usr/bin/java -classpath /x/nextflow.jar nextflow.cli.Launcher run .", True,
+     "the classpath launcher"),
+    ("/bin/bash -c 'cd /x && nextflow run .'", True, "sh -c wrapper around a run"),
+]
+for cmd, want, label in CASES:
+    check("looks_like_nextflow(%s) == %s" % (label, want),
+          runner.looks_like_nextflow(cmd) is want)
+
+# synthetic process table: 100 = our server, 200/300/400 = our children and
+# grandchildren (preflight/engine), 500 = a foreign engine, 600 = decoy,
+# 700 = foreign `nextflow -version`.
+ROWS = [
+    (100, 1, "python3 /x/ui/server.py --project /x/WGSpipeline-nextflow"),
+    (200, 100, "bash /x/bin/pipeline-ui --port 0"),
+    (300, 100, "java -jar /x/nextflow-26.10.0-14055.jar run ."),
+    (400, 300, "java -jar /x/nextflow-26.10.0-14055.jar run ."),
+    (500, 1, "java -jar /x/nextflow-26.10.0-14055.jar run ."),
+    (600, 1, "bash -c sleep 3 /x/WGSpipeline-nextflow run"),
+    (700, 1, "java -jar /x/nextflow-26.10.0-14055.jar -version"),
+]
+found = runner.external_nextflow_pids_from_rows(ROWS, {100})
+check("the foreign engine is reported", found == [500])
+check("our own engine and its descendants are excluded", 300 not in found and 400 not in found)
+check("the checkout-name decoy is not reported", 600 not in found)
+check("a foreign preflight -version is not reported", 700 not in found)
+sys.exit(1 if FAILS else 0)
+PYUNIT
+    local out rc
+    out="$(PROJECT_DIR="${PROJECT_DIR}" python3 "${WORK}/busy_unit.py" 2>&1)"; rc=$?
+    while IFS= read -r line; do
+        case "${line}" in
+            "OK "*) pass "busy: ${line#OK }" ;;
+            "FAIL "*) fail "busy: ${line#FAIL }" ;;
+        esac
+    done <<< "${out}"
+    expect_eq "busy detection unit script exits 0" "0" "${rc}"
+    if [ "${rc}" -ne 0 ]; then printf '%s\n' "${out}" | head -25 | sed 's/^/    /'; fi
+}
+
 phase_startup_auth_preflight() {
     banner "launcher + auth + static serving (§13.1, §13.2, §13.4, §13.16)"
     local code body hdr
@@ -1899,6 +1965,7 @@ make_real_project "${WORK}/project-real-fail"
 P_FAKE="$(cd "${WORK}/project-fake" && pwd -P)"
 P_NONF="$(cd "${WORK}/project-nonf" && pwd -P)"
 
+phase_busy_detection || true
 phase_startup_auth_preflight || true
 phase_validation || true
 phase_single_instance || true

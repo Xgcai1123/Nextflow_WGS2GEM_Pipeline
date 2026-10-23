@@ -469,7 +469,7 @@ version is declared once, in the `manifest` block of `nextflow.config`:
 ```groovy
 manifest {
     name            = 'NextFlow-WGS2GEM'
-    version         = '0.2.0'
+    version         = '0.2.1'
     nextflowVersion = '>=25.10.0'
 }
 ```
