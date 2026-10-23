@@ -545,7 +545,7 @@ data: {"from": 1234, "text": "…原样文本块…"}
 | 基线对拍 | 全部一致:组装 4,835,534 / 370 / 159,317 / 50.33 与 5,404,919 / 390 / 244,803 / 50.34;BUSCO 440/440;C:100.0%[S:99.5%,D:0.5%];MEMOTE 68.1 / 67.8;生长 0.953 / 0.529、66.000 / 66.001 / 0.000 / 0.228;Bakta 4,891 / 5,496;genome fraction / identity 99.38 / 99.926 与 97.37 / 99.721 |
 | 失败呈现 | 真实 stub DAG 注入 FASTQC 失败 → `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确;无报告 → `failed(report_missing)` |
 | 取消 / attach | 真实运行取消 <1 s、进程组消失、`work/`+`results/` 保留;`kill -9` UI 后 attach 到同 run/pid、完成数从日志恢复、仍可取消(真实 Nextflow 与假引擎两条路径) |
-| 自动化守卫 | `tests/ci/run-ui-check.sh`:**318 ok / 0 FAIL / 0 SKIP**,39 s(含真实 stub DAG 25 任务、注入失败、F50 忙检测单测,以及 0.3.0 的英文/进度条/刷新兜底断言) |
+| 自动化守卫 | `tests/ci/run-ui-check.sh`:**319 ok / 0 FAIL / 0 SKIP**,39 s(含真实 stub DAG 25 任务、注入失败、F50 忙检测单测,以及 0.3.0 的英文/进度条/刷新兜底断言;真实引擎两条腿钉 `--min_free_disk_gb=1` 并断言未被磁盘预检拦下,见 F52) |
 | F18 | 仓库 `results/`、`data/`、tracked `samples.tsv` 在测试中零改动 |
 
 

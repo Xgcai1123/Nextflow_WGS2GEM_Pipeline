@@ -90,8 +90,8 @@ F41 / D25、磁盘预检提示语改为指向本工具(并加了一条断言钉�
 
 **交付物**:`ui/server.py` `ui/runner.py` `ui/sheet.py`(python3 标准库,零第三方依赖)、
 `ui/index.html` `ui/app.js` `ui/style.css`(原生 JS,无构建、无外链)、`bin/pipeline-ui`(启动器)、
-`tests/ci/run-ui-check.sh`(318 条断言,39 s,CI job `local-ui`)、`docs/ui.md`(契约 + UI-D1..D12 +
-实测记录)、README「Local web UI」小节、CHANGELOG 0.2.0、设计文档 D26 / F45–F48。
+`tests/ci/run-ui-check.sh`(319 条断言,39 s,CI job `local-ui`)、`docs/ui.md`(契约 + UI-D1..D12 +
+实测记录)、README「Local web UI」小节、CHANGELOG 0.2.0、设计文档 D26 / F45–F48、F52。
 
 ### 实际形态(与草案逐条对照)
 
@@ -154,6 +154,16 @@ stderr 尾解析正确;`noreport`(exit 0 无报告)判 `failed(report_missing)`�
 用户验收后追加:界面改英文、加总进度条、修"任务结束后运行模块不更新"(SSE 只在状态名变化时推送,
 运行中计数/阶梯冻结;后台标签页回来看到旧状态)。0.3.0 的做法:SSE state 事件带进度摘要、5 s 可见性轮询、
 focus/visibility 刷新、终态二次拉取、45 s 看门狗;断言 282 → 318。≤45 min 复测项仍未做。
+
+### 推送后的 CI 修复(2026-10-24,F52)
+
+用户要求 `github 推送` 后立即核对远端 CI:私有仓库 `MeMoModelling/NextFlow-WGS2GEM` 的
+`local web UI contract` 作业红,而公开镜像同一提交绿、重跑仍红。根因不在 0.3.0 的代码:该作业
+真实引擎的两条腿(`real stub DAG`、注入失败)是唯一没传 `--min_free_disk_gb` 的 CI 检查,于是继承
+管线默认 20 GiB 闸门,而那台 runner 只剩 **12.1 GiB 可用**(`/dev/root`,71.6 GiB)—— 引擎在磁盘预检
+处中止、0 个任务、exit 1。修法:两条腿传 `=1`;新增断言"真实 stub 运行不是被磁盘预检拦下的";
+失败时 trap 导出引擎自己的 `run.log`/`.nextflow.log`(正是这条可观测性补丁让根因一次拿到)。
+断言 318 → 319。
 
 ### 遗留
 

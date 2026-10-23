@@ -55,7 +55,13 @@ assertion. They are independent and can be run in any order.
   0.3 s, `run-clean-check.sh` 0.4 s, `run-lint.sh` 2 s, `run-stub-smoke.sh` 8 s,
   `run-growth-check.sh` 12 s, `run-disk-guard.sh` 16 s, `run-failure-isolation.sh` 27 s,
   `run-preview.sh` 33 s.
-- `run-ui-check.sh` is the newest member: 318 assertions, 39 s. Its 0.3.0 additions pin the English
+- `run-ui-check.sh` is the newest member: 319 assertions, 39 s. Its two real-engine legs pass
+  `--min_free_disk_gb=1`, because the pipeline's 20 GiB default is a property of the *host*, not of
+  the code under test (F52): a GitHub runner offered 12.1 GiB free and the run died inside the disk
+  pre-flight while the identical commit passed on another runner, and one assertion now says so in
+  words. A failure also dumps the engine's own `run.log`/`.nextflow.log` from the temp copy --
+  without that dump the CI log names the symptom (`expected 'done', got 'failed'`) and nothing else.
+  Its 0.3.0 additions pin the English
   interface (CJK count 0 in html/js/css and in ui/*.py, English API messages), the overall progress
   bar (element, aria range, percentage clamp) and the state-refresh fallbacks (5 s poll,
   visibilitychange/focus, 45 s SSE watchdog, terminal re-fetch) so the run panel cannot depend on a

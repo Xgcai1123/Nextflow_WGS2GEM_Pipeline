@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The UI check no longer depends on which host it lands on.** Its two real-engine legs (the stub
+  DAG and the injected failure) drove Nextflow without pinning the disk-space floor, so they
+  inherited the pipeline's 20 GiB default (F20/F22) -- the only CI script that did. GitHub's
+  `ubuntu-24.04` image was measured at **12.1 GiB free of 71.6 GiB** (`/dev/root`) on 2026-10-24:
+  the engine aborted inside the pre-flight before submitting a single task, and the job reported
+  `state is done: expected 'done', got 'failed'` with exit 1 and 0 tasks, while the identical commit
+  passed on a runner with more free space (F52). Both legs now pass `--min_free_disk_gb=1` (as every
+  other check already did) and assert that the pre-flight did not stop the run, so the next such
+  runner is named rather than merely red. When the UI check does fail, its trap now dumps the
+  engine's own `run.log` and `.nextflow.log` from the temp project copy instead of deleting the only
+  evidence -- that dump is what located this cause on the first run.
+
 ## [0.3.0] - 2026-10-24
 
 ### Added
