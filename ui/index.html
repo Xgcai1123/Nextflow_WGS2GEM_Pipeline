@@ -1,34 +1,34 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NextFlow-WGS2GEM · 本地运行控制台</title>
+<title>NextFlow-WGS2GEM · Local run console</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<a class="skip-link" href="#main">跳到主内容</a>
+<a class="skip-link" href="#main">Skip to main content</a>
 
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark" aria-hidden="true">WGS<span class="brand-arrow">→</span>GEM</span>
     <div class="brand-text">
       <h1>NextFlow-WGS2GEM</h1>
-      <p>细菌 WGS → 基因组尺度代谢模型 · 本地单用户控制台</p>
+      <p>Bacterial WGS → genome-scale metabolic model · local single-user console</p>
     </div>
   </div>
 
   <div class="topbar-side">
     <div class="status-wrap">
-      <span id="status-badge" class="badge badge-idle" data-state="idle" role="status" aria-live="polite">空闲</span>
-      <span id="conn-badge" class="conn conn-off" title="日志流连接状态">日志流未连接</span>
+      <span id="status-badge" class="badge badge-idle" data-state="idle" role="status" aria-live="polite">Idle</span>
+      <span id="conn-badge" class="conn conn-off" title="Log stream connection state">Log stream disconnected</span>
     </div>
     <div class="meta-line">
-      <span class="meta-item">项目 <code id="project-path" class="path" title="项目根目录">—</code></span>
-      <span class="meta-item" id="server-meta">端口 — · 版本 —</span>
+      <span class="meta-item">Project <code id="project-path" class="path" title="Project root">—</code></span>
+      <span class="meta-item" id="server-meta">Port — · version —</span>
     </div>
-    <button id="btn-preflight" class="btn btn-ghost" type="button">预检</button>
+    <button id="btn-preflight" class="btn btn-ghost" type="button">Preflight</button>
   </div>
 </header>
 
@@ -36,108 +36,126 @@
 
 <main id="main" class="layout">
 
-  <!-- ======================= 左栏：输入 ======================= -->
+  <!-- ======================= left column: inputs ======================= -->
   <section class="col col-left" aria-labelledby="left-h">
     <div class="col-head">
-      <h2 id="left-h">样本 <span id="sample-count" class="count-chip">0</span></h2>
-      <button id="btn-add-sample" class="btn btn-small" type="button">＋ 添加样本</button>
+      <h2 id="left-h">Samples <span id="sample-count" class="count-chip">0</span></h2>
+      <button id="btn-add-sample" class="btn btn-small" type="button">+ Add sample</button>
     </div>
 
     <div id="sample-list" class="sample-list" aria-live="polite"></div>
     <p id="sample-empty-hint" class="empty-hint" hidden>
-      还没有样本。至少添加 1 个样本（样本名 + R1 + R2 绝对路径）才能开始运行。
+      No samples yet. Add at least 1 sample (sample name + absolute R1 and R2 paths) to start a run.
     </p>
 
     <fieldset id="run-options" class="panel options-panel">
-      <legend>运行选项</legend>
+      <legend>Run options</legend>
 
       <div class="field">
-        <span class="field-label" id="mode-label">运行模式</span>
+        <span class="field-label" id="mode-label">Run mode</span>
         <div class="radio-row" role="radiogroup" aria-labelledby="mode-label">
-          <label class="radio"><input type="radio" name="mode" value="resume" checked> 续跑 <code>-resume</code></label>
-          <label class="radio"><input type="radio" name="mode" value="fresh"> 全新运行</label>
+          <label class="radio"><input type="radio" name="mode" value="resume" checked> Resume <code>-resume</code></label>
+          <label class="radio"><input type="radio" name="mode" value="fresh"> Fresh run</label>
         </div>
-        <p class="hint">续跑复用 work/ 中已完成的任务；全新运行从空缓存开始。默认按是否存在历史产物选择。</p>
+        <p class="hint">Resume reuses tasks already completed in work/; a fresh run starts from an empty cache. The default follows whether previous outputs exist.</p>
       </div>
 
       <div class="field">
         <label class="check danger-check">
           <input type="checkbox" id="clean-check">
-          <span>运行前清空产物<em>（危险）</em></span>
+          <span>Clean outputs before run <em>(dangerous)</em></span>
         </label>
-        <p class="hint">唯一删除入口是 <code>bin/pipeline-clean outputs --yes</code>；data/ 与仓库文件不动。</p>
+        <p class="hint">The only deletion path is <code>bin/pipeline-clean outputs --yes</code>; data/ and repository files are never touched.</p>
 
         <div id="clean-plan" class="clean-plan" hidden>
           <div class="clean-plan-head">
-            <span>pipeline-clean check · 将删除以下内容</span>
-            <span class="badge badge-warn">不可撤销</span>
+            <span>pipeline-clean check · will delete</span>
+            <span class="badge badge-warn">Irreversible</span>
           </div>
-          <pre id="clean-plan-text" class="clean-plan-text">（尚无预检结果，点击顶栏「预检」后显示清单）</pre>
-          <p class="hint">勾选后开始运行会先展示清单并要求二次确认；确认后先执行清理，清理失败则不启动 nextflow。</p>
+          <pre id="clean-plan-text" class="clean-plan-text">(No preflight result yet; click "Preflight" in the top bar to show the list.)</pre>
+          <p class="hint">With this checked, starting a run first shows the list and asks for a second confirmation; after confirming, the clean runs first and nextflow is not started if the clean fails.</p>
         </div>
       </div>
 
       <details class="advanced">
-        <summary>高级选项</summary>
+        <summary>Advanced options</summary>
         <div class="adv-body">
           <div class="field">
             <label class="field-label" for="profile-select">profile</label>
             <select id="profile-select">
-              <option value="standard">standard（默认）</option>
-              <option value="lowmem">lowmem（低内存）</option>
+              <option value="standard">standard (default)</option>
+              <option value="lowmem">lowmem (low memory)</option>
             </select>
           </div>
           <div class="field">
             <label class="field-label" for="report-tag">report_tag</label>
-            <input id="report-tag" type="text" inputmode="latin" placeholder="例如 cohortB（可空）" autocomplete="off" spellcheck="false">
-            <p class="hint">只允许字母、数字、点、下划线、连字符；空值表示不传 <code>--report_tag</code>。</p>
+            <input id="report-tag" type="text" inputmode="latin" placeholder="e.g. cohortB (optional)" autocomplete="off" spellcheck="false">
+            <p class="hint">Only letters, digits, dot, underscore and hyphen are allowed; empty means <code>--report_tag</code> is not passed.</p>
           </div>
         </div>
       </details>
     </fieldset>
   </section>
 
-  <!-- ======================= 中栏：运行 ======================= -->
+  <!-- ======================= middle column: run ======================= -->
   <section class="col col-mid" aria-labelledby="mid-h">
-    <h2 id="mid-h" class="sr-only">运行状态</h2>
+    <h2 id="mid-h" class="sr-only">Run status</h2>
 
     <div id="failure-panel" class="panel panel-fail" role="alert" hidden></div>
     <div id="notice-panel" class="notice" hidden></div>
 
     <section class="panel panel-preflight" aria-labelledby="preflight-h">
       <div class="panel-head">
-        <h2 id="preflight-h">预检</h2>
-        <span id="preflight-summary" class="summary muted">尚未预检</span>
-        <button id="btn-preflight-2" class="btn btn-small" type="button">重新预检</button>
+        <h2 id="preflight-h">Preflight</h2>
+        <span id="preflight-summary" class="summary muted">Not checked yet</span>
+        <button id="btn-preflight-2" class="btn btn-small" type="button">Re-run preflight</button>
       </div>
       <ul id="preflight-list" class="check-list">
-        <li class="check-item status-unknown"><span class="check-icon" aria-hidden="true">·</span><span class="check-label">尚未预检</span><span class="check-detail">点击「预检」检查本机环境（约 1–3 秒）</span></li>
+        <li class="check-item status-unknown"><span class="check-icon" aria-hidden="true">·</span><span class="check-label">Not checked yet</span><span class="check-detail">Click "Preflight" to check the local environment (about 1–3 s)</span></li>
       </ul>
-      <p id="preflight-foot" class="hint">预检只提示，不代替管线裁决：预检通过不代表管线一定会成功。</p>
+      <p id="preflight-foot" class="hint">Preflight is advisory only: a passing preflight does not guarantee the pipeline will succeed.</p>
     </section>
 
     <section class="panel panel-run" aria-labelledby="run-h">
       <div class="panel-head">
-        <h2 id="run-h">运行</h2>
-        <span id="run-meta" class="summary muted">尚未运行</span>
+        <h2 id="run-h">Run</h2>
+        <span id="run-meta" class="summary muted">No run yet</span>
+        <span id="state-updated" class="state-updated">state updated —</span>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-head">
+          <span class="progress-label">Overall progress</span>
+          <span id="progress-pct" class="progress-pct">—</span>
+        </div>
+        <div id="overall-progress" class="progress is-idle" role="progressbar" aria-label="Overall run progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="No run yet">
+          <div class="progress-fill" style="width:0%"></div>
+        </div>
+        <p id="progress-caption" class="progress-caption" aria-live="polite">No run yet</p>
+        <div class="progress-meta">
+          <span class="progress-stage-wrap">
+            <span class="progress-stage-label">Current stage</span>
+            <span id="current-stage" class="current-stage">Waiting for the engine…</span>
+          </span>
+        </div>
       </div>
 
       <div class="action-row">
-        <button id="btn-run" class="btn btn-primary" type="button" disabled>开始运行</button>
-        <button id="btn-cancel" class="btn btn-danger" type="button" disabled>取消运行</button>
+        <button id="btn-run" class="btn btn-primary" type="button" disabled>Start run</button>
+        <button id="btn-cancel" class="btn btn-danger" type="button" disabled>Cancel run</button>
         <span id="action-hint" class="hint" role="status" aria-live="polite"></span>
       </div>
 
-      <div class="counters" aria-label="任务计数">
-        <div class="counter"><span class="counter-label">已提交</span><b id="count-submitted">—</b></div>
-        <div class="counter"><span class="counter-label">完成</span><b id="count-completed">—</b></div>
-        <div class="counter"><span class="counter-label">失败</span><b id="count-failed">—</b></div>
-        <div class="counter"><span class="counter-label">期望</span><b id="count-expected">—</b></div>
+      <div class="counters" aria-label="Task counters">
+        <div class="counter"><span class="counter-label">Submitted</span><b id="count-submitted">—</b></div>
+        <div class="counter"><span class="counter-label">Completed</span><b id="count-completed">—</b></div>
+        <div class="counter"><span class="counter-label">Failed</span><b id="count-failed">—</b></div>
+        <div class="counter"><span class="counter-label">Expected</span><b id="count-expected">—</b></div>
       </div>
 
       <div class="ladder-wrap">
         <table id="ladder" class="ladder">
-          <caption class="sr-only">阶段阶梯：12 个 process × 样本的完成情况</caption>
+          <caption class="sr-only">Stage ladder: completion of the 12 processes × samples</caption>
           <thead id="ladder-head"></thead>
           <tbody id="ladder-body"></tbody>
         </table>
@@ -147,76 +165,76 @@
 
     <section class="panel panel-log" aria-labelledby="log-h">
       <div class="panel-head log-head">
-        <h2 id="log-h">日志</h2>
-        <span id="log-meta" class="summary muted">等待运行</span>
-        <button id="btn-log-copy" class="btn btn-small" type="button">复制</button>
-        <a id="btn-log-download" class="btn btn-small" href="api/download?what=log">下载日志</a>
+        <h2 id="log-h">Log</h2>
+        <span id="log-meta" class="summary muted">Waiting for a run</span>
+        <button id="btn-log-copy" class="btn btn-small" type="button">Copy</button>
+        <a id="btn-log-download" class="btn btn-small" href="api/download?what=log">Download log</a>
       </div>
       <div class="log-toolbar">
-        <label class="check"><input type="checkbox" id="auto-scroll" checked> 自动滚动</label>
-        <label class="field-label" for="log-filter">过滤</label>
-        <input id="log-filter" type="search" placeholder="关键字，如 ERROR / SPADES" autocomplete="off" spellcheck="false">
-        <span id="log-count" class="muted">0 行</span>
+        <label class="check"><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
+        <label class="field-label" for="log-filter">Filter</label>
+        <input id="log-filter" type="search" placeholder="Keyword, e.g. ERROR / SPADES" autocomplete="off" spellcheck="false">
+        <span id="log-count" class="muted">0 lines</span>
       </div>
-      <pre id="log" class="log" tabindex="0" aria-label="运行日志（只读）"><span class="log-placeholder">运行日志将在这里实时显示。日志只读，按 textContent 渲染，ERROR / Caused by / FAIL 行标红。</span></pre>
+      <pre id="log" class="log" tabindex="0" aria-label="Run log (read-only)"><span class="log-placeholder">The run log appears here in real time. It is read-only, rendered via textContent, and ERROR / Caused by / FAIL lines are highlighted red.</span></pre>
     </section>
   </section>
 
-  <!-- ======================= 右栏：结果 ======================= -->
+  <!-- ======================= right column: results ======================= -->
   <aside class="col col-right" aria-labelledby="right-h">
-    <h2 id="right-h" class="sr-only">结果与产物</h2>
+    <h2 id="right-h" class="sr-only">Results and artifacts</h2>
 
     <section class="panel panel-report" aria-labelledby="report-h">
       <div class="panel-head">
-        <h2 id="report-h">报告</h2>
-        <span id="report-state" class="summary muted">尚未运行</span>
+        <h2 id="report-h">Report</h2>
+        <span id="report-state" class="summary muted">No run yet</span>
       </div>
 
       <dl class="kv">
-        <dt>报告文件</dt>
+        <dt>Report file</dt>
         <dd><code id="report-path" class="path">—</code></dd>
-        <dt>大小</dt>
+        <dt>Size</dt>
         <dd id="report-size">—</dd>
-        <dt>发现时间</dt>
+        <dt>Found at</dt>
         <dd id="report-found">—</dd>
       </dl>
 
       <div class="report-actions">
-        <button id="btn-load-report" class="btn btn-primary" type="button" disabled>加载报告（约 15 MB）</button>
-        <a id="link-open-report" class="btn" href="api/report" target="_blank" rel="noopener" aria-disabled="true">在新标签打开</a>
-        <button id="btn-download-report" class="btn" type="button" disabled>下载报告</button>
-        <a id="link-download-results" class="btn" href="api/download?what=results" aria-disabled="true">下载 results/（tar.gz）</a>
+        <button id="btn-load-report" class="btn btn-primary" type="button" disabled>Load report (~15 MB)</button>
+        <a id="link-open-report" class="btn" href="api/report" target="_blank" rel="noopener" aria-disabled="true">Open in new tab</a>
+        <button id="btn-download-report" class="btn" type="button" disabled>Download report</button>
+        <a id="link-download-results" class="btn" href="api/download?what=results" aria-disabled="true">Download results/ (tar.gz)</a>
       </div>
-      <p id="report-hint" class="hint">报告是自包含单文件 MultiQC 页面。为节省首屏流量，iframe 只在点击后加载。</p>
+      <p id="report-hint" class="hint">The report is a self-contained single-file MultiQC page. To save initial bandwidth the iframe is only loaded after a click.</p>
 
       <div id="report-frame-wrap" class="report-frame-wrap" hidden>
         <div class="report-frame-bar">
-          <span>报告预览（iframe）</span>
-          <button id="btn-unload-report" class="btn btn-small" type="button">卸载 iframe</button>
+          <span>Report preview (iframe)</span>
+          <button id="btn-unload-report" class="btn btn-small" type="button">Unload iframe</button>
         </div>
-        <iframe id="report-frame" class="report-frame" title="MultiQC 报告预览"></iframe>
+        <iframe id="report-frame" class="report-frame" title="MultiQC report preview"></iframe>
       </div>
     </section>
 
     <section class="panel panel-artifacts" aria-labelledby="artifacts-h">
       <div class="panel-head">
-        <h2 id="artifacts-h">产物与路径</h2>
+        <h2 id="artifacts-h">Artifacts and paths</h2>
       </div>
       <dl class="kv kv-artifacts">
-        <dt>运行 ID</dt>
+        <dt>Run ID</dt>
         <dd><code id="artifact-run-id" class="path">—</code></dd>
-        <dt>运行日志</dt>
-        <dd><code id="artifact-log" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-log">复制</button></dd>
-        <dt>样本表</dt>
-        <dd><code id="artifact-sheet" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-sheet">复制</button></dd>
+        <dt>Run log</dt>
+        <dd><code id="artifact-log" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-log">Copy</button></dd>
+        <dt>Sample sheet</dt>
+        <dd><code id="artifact-sheet" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-sheet">Copy</button></dd>
         <dt>nextflow report</dt>
-        <dd><code id="artifact-nf-report" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-nf-report">复制</button></dd>
+        <dd><code id="artifact-nf-report" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-nf-report">Copy</button></dd>
         <dt>nextflow trace</dt>
-        <dd><code id="artifact-nf-trace" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-nf-trace">复制</button></dd>
+        <dd><code id="artifact-nf-trace" class="path">—</code><button class="btn-mini" type="button" data-copy="artifact-nf-trace">Copy</button></dd>
       </dl>
       <p class="hint">
-        nextflow 的 report / trace 落在 <code>results/report/nextflow/</code>，契约未提供单独下载接口；
-        它们会包含在「下载 results/」的压缩包里。
+        nextflow's report / trace are written to <code>results/report/nextflow/</code>; the contract has no separate
+        download endpoint for them. They are included in the "Download results/" archive.
       </p>
     </section>
   </aside>
@@ -227,9 +245,9 @@
 
 <div id="auth-overlay" class="overlay" hidden>
   <div class="overlay-card">
-    <h1>需要启动器 token</h1>
-    <p>本页面只能通过启动器打印的完整 URL 打开（URL 里带 <code>?token=…</code>）。</p>
-    <p class="hint">请在终端运行 <code>bin/pipeline-ui</code>，然后打开它打印的地址；不要把地址发给别人。</p>
+    <h1>Launcher token required</h1>
+    <p>This page can only be opened through the full URL printed by the launcher (the URL carries <code>?token=…</code>).</p>
+    <p class="hint">Run <code>bin/pipeline-ui</code> in a terminal, then open the address it prints; do not share that address with anyone.</p>
   </div>
 </div>
 
