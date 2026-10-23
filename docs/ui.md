@@ -520,13 +520,16 @@ data: {"from": 1234, "text": "…原样文本块…"}
 | 全流程 | **26/26 任务,exit 0,77.5 分钟**(00:33:50 → 01:51:21 +0800),UI 终态 `done` |
 | 主机 | 8 核、**8 GiB RAM**;loadavg 3.35 → 24.1(峰值)→ 6.65;swap 3.3–4.8 GiB(验收计时必须附负载,F42) |
 | 清空 | `pipeline-clean outputs --yes`:13 条路径、1.74 GiB,输入前后盘点一致 |
-| 报告 | 16,150,251 B;`/api/report` 与文件**逐字节一致**;iframe 渲染真实 MultiQC 页面(含内嵌 MEMOTE/QUAST),截图 `/tmp/attempt2-report.png` |
+| 报告 | 16,150,251 B;`/api/report` 与文件**逐字节一致**;iframe 渲染真实 MultiQC 页面(含内嵌 MEMOTE/QUAST),截图见下 |
 | 下载 | 350 MiB `results` tar.gz,27.6 s;**69/69 文件逐文件一致**;解包后 QUAST `report.tsv` 与 15.4 MiB 报告**逐字节相同** |
 | 基线对拍 | 全部一致:组装 4,835,534 / 370 / 159,317 / 50.33 与 5,404,919 / 390 / 244,803 / 50.34;BUSCO 440/440;C:100.0%[S:99.5%,D:0.5%];MEMOTE 68.1 / 67.8;生长 0.953 / 0.529、66.000 / 66.001 / 0.000 / 0.228;Bakta 4,891 / 5,496;genome fraction / identity 99.38 / 99.926 与 97.37 / 99.721 |
 | 失败呈现 | 真实 stub DAG 注入 FASTQC 失败 → `failed`,`FASTQC_RAW / CI_B_1 / exit 1`,stderr 尾解析正确;无报告 → `failed(report_missing)` |
 | 取消 / attach | 真实运行取消 <1 s、进程组消失、`work/`+`results/` 保留;`kill -9` UI 后 attach 到同 run/pid、完成数从日志恢复、仍可取消(真实 Nextflow 与假引擎两条路径) |
 | 自动化守卫 | `tests/ci/run-ui-check.sh`:**265 ok / 0 FAIL / 0 SKIP**,37 s(含真实 stub DAG 25 任务与注入失败) |
 | F18 | 仓库 `results/`、`data/`、tracked `samples.tsv` 在测试中零改动 |
+
+
+![2026-10-24 真实 2 样本验收:26/26、exit 0、12 步全绿、右侧为真实 15.4 MiB MultiQC 报告(iframe)](ui-acceptance.png)
 
 ### 14.3 45 分钟口径:未达成,原因已分清
 
