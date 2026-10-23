@@ -2050,8 +2050,14 @@ phase_real_stub() {
         "CI_A" "${P}/tests/ci/fixtures/raw/CI_A_1.fastq.gz" "${P}/tests/ci/fixtures/raw/CI_A_2.fastq.gz" "" "" "${P}/tests/ci/fixtures/reference/CI_A.fasta" \
         "CI_B" "${P}/tests/ci/fixtures/raw/CI_B_1.fastq.gz" "${P}/tests/ci/fixtures/raw/CI_B_2.fastq.gz" "" "" ""
 
+    # --min_free_disk_gb=1: the pipeline's default floor is 20 GiB (F20/F22) and
+    # a GitHub host has no obligation to offer it -- the runner image measured
+    # 12.1 GiB free on 2026-10-24 when this leg inherited the default and died in
+    # the pre-flight instead of the pipeline (F52). Every other check already
+    # pins the floor this way; this leg is the one that drives the whole DAG.
     if ! start_ui "${P}" "${LOG_DIR}/ui-06-real.log" --nextflow "${nf}" \
-        --nextflow-arg=-c --nextflow-arg=tests/ci/ci.config --nextflow-arg=-stub-run; then
+        --nextflow-arg=-c --nextflow-arg=tests/ci/ci.config --nextflow-arg=-stub-run \
+        --nextflow-arg=--min_free_disk_gb=1; then
         fail "launcher failed to start for the real stub integration"
         return 0
     fi
@@ -2062,6 +2068,17 @@ phase_real_stub() {
         return 0
     fi
     if wait_run_state_t 300 done failed interrupted; then pass "real stub run reaches a terminal state"; else fail "real stub run never terminated (state=$(state_field run.state))"; fi
+    # Name the failure instead of inferring it: a run stopped by the disk
+    # pre-flight says nothing about the pipeline or the UI, and the generic
+    # "expected done, got failed" sent the 0.3.0 post-release triage through a
+    # bisect it did not need (F52).
+    local stub_log
+    stub_log="$(state_field run.log)"
+    if [ -n "${stub_log}" ] && grep -qF '[disk-check] refusing to start' "${stub_log}" 2>/dev/null; then
+        fail "real stub run was stopped by the disk pre-flight -- the host offers fewer GiB than the 20 GiB default floor; this leg must pass --min_free_disk_gb=1 (F52)"
+    else
+        pass "real stub run was not stopped by the disk pre-flight (host-independent floor)"
+    fi
     expect_eq "real stub run state is done" "done" "$(state_field run.state)"
     expect_eq "real stub run exit_code is 0" "0" "$(state_field run.exit_code)"
     expect_eq "real stub task count is 25 (2 samples x 11 + growth + MultiQC + 1 ref)" "25" "$(state_field run.tasks.submitted)"
@@ -2145,7 +2162,7 @@ phase_real_failure() {
     if ! start_ui "${P}" "${LOG_DIR}/ui-07-real-fail.log" --nextflow "${nf}" \
         --nextflow-arg=-c --nextflow-arg=tests/ci/ci.config \
         --nextflow-arg=-c --nextflow-arg=tests/ci/inject-sample-failure.config \
-        --nextflow-arg=-stub-run; then
+        --nextflow-arg=-stub-run --nextflow-arg=--min_free_disk_gb=1; then
         fail "launcher failed to start for the real failure injection"
         return 0
     fi
