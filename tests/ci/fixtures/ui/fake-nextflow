@@ -28,7 +28,15 @@ Control file (rewritten between scenarios, UI does not need restarting):
                                # the exact expected tree because it wrote the control file.
      "config": "ok",           # ok | fail -- `config -flat` behaviour
      "version": "26.10.0",     # `-version` behaviour
-     "stderr": ""}             # extra stderr noise, for log-streaming tests
+     "stderr": "",             # extra stderr noise, for log-streaming tests
+     "engine_log": false}      # true = REAL engine shape (F48): write task
+                               # completion to <cwd>/.nextflow.log as
+                               # `Task completed > TaskHandler[...; status:
+                               # COMPLETED; ...]` and STOP printing
+                               # `Completed process >` on stdout. Real Nextflow
+                               # 26.10.0 only prints Submitted; completion lives
+                               # in .nextflow.log. false = the old fake shape
+                               # (stdout Completed lines); both must be tested.
 
 Exit codes: 0 success, 1 fail, 143 killed by SIGTERM (slow mode). No ANSI
 colours: the UI parses lines, and so do the tests.
@@ -55,6 +63,7 @@ DEFAULT_CTRL = {
     "config": "ok",
     "version": "26.10.0",
     "stderr": "",
+    "engine_log": False,
     # A mini results tree: enough files to prove the results tar is the real tree
     # (not a fixed constant) and that a download is not a directory listing.
     # A test that overwrites `results_files` in the control file knows exactly
@@ -200,6 +209,41 @@ def write_report(path, html):
     p.write_text(html, encoding="utf-8")
 
 
+def rotate_engine_log(cwd):
+    """Mimic nextflow's per-launch rotation: .nextflow.log -> .nextflow.log.1.
+
+    A fresh file means a new inode, which is exactly what the UI tailer keys on
+    to restart from byte 0 instead of inheriting the previous run's completions.
+    """
+    path = pathlib.Path(cwd) / ".nextflow.log"
+    try:
+        if path.exists():
+            os.replace(str(path), str(path) + ".1")
+    except OSError:
+        pass
+    try:
+        path.write_text("", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def engine_completion_line(idx, name, tag, status, exit_code, cwd):
+    """The real engine's completion line, as written to .nextflow.log (F48)."""
+    return (
+        "DEBUG nextflow.processor.TaskPollingMonitor - Task completed > "
+        "TaskHandler[id: %d; name: %s (%s); status: %s; exit: %s; error: -; "
+        "workDir: %s]\n"
+        % (idx + 1, name, tag, status, exit_code,
+           pathlib.Path(cwd) / "work" / hash_for(idx))
+    )
+
+
+def append_engine_log(path, line):
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+
+
 def write_results_files(ctrl, cwd):
     """Publish a mini results tree so downloads can be checked against it.
 
@@ -292,6 +336,11 @@ def main():
     emit("executor >  local (fake)")
     emit("")
 
+    engine_log = bool(ctrl.get("engine_log"))
+    engine_path = pathlib.Path(cwd) / ".nextflow.log"
+    if engine_log:
+        rotate_engine_log(cwd)
+
     if mode == "slow":
         # Never finishes: proves cancel/attach, and that a stuck run is visible.
         i = 0
@@ -316,9 +365,19 @@ def main():
         emit("[%s] Submitted process > %s (%s)" % (hash_for(idx), name, tag))
         time.sleep(delay)
         if fail_at is not None and idx == fail_at:
+            if engine_log:
+                append_engine_log(engine_path, engine_completion_line(
+                    idx, name, tag, "FAILED", 1, cwd))
             emit(fail_block(name, tag, ctrl, cwd))
             return 1
-        emit("[%s] Completed process > %s (%s)" % (hash_for(idx), name, tag))
+        if engine_log:
+            # F48: real Nextflow 26.10.0 prints nothing here on stdout; the
+            # completion is a DEBUG line in .nextflow.log. A fake that keeps
+            # printing Completed hides exactly this bug.
+            append_engine_log(engine_path, engine_completion_line(
+                idx, name, tag, "COMPLETED", 0, cwd))
+        else:
+            emit("[%s] Completed process > %s (%s)" % (hash_for(idx), name, tag))
         time.sleep(delay)
 
     if mode == "noreport":

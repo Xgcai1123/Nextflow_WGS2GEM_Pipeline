@@ -509,6 +509,46 @@ run_accepted_or_skip() {
 get_state() { get_api "/api/state" "${WORK}/state.json" >/dev/null; }
 state_field() { json_get "${WORK}/state.json" "$1"; }
 
+# step_field <process> <field> -- one cell of the 12-stage ladder from the last
+# /api/state snapshot (state.json is refreshed by get_state).
+step_field() {
+    python3 - "${WORK}/state.json" "$1" "$2" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    print("")
+    sys.exit(0)
+run = data.get("run") or {}
+for step in run.get("steps") or []:
+    if step.get("process") == sys.argv[2]:
+        value = step.get(sys.argv[3])
+        print("" if value is None else value)
+        break
+else:
+    print("")
+PY
+}
+
+# step_by_sample <process> <sample> -- the by_sample cell of the ladder.
+step_by_sample() {
+    python3 - "${WORK}/state.json" "$1" "$2" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    print("")
+    sys.exit(0)
+run = data.get("run") or {}
+for step in run.get("steps") or []:
+    if step.get("process") == sys.argv[2]:
+        print((step.get("by_sample") or {}).get(sys.argv[3], ""))
+        break
+else:
+    print("")
+PY
+}
+
 wait_api_ready() {
     local path="$1" timeout="${2:-25}" i=0 code
     while [ "${i}" -lt $((timeout * 10)) ]; do
@@ -876,6 +916,10 @@ phase_validation() {
     validation_case() { # <label> <bodyfile> <require row+field 0|1>
         local label="$1" body="$2" want_rowcol="$3" code
         code="$(post_api_hdr "/api/run" "${body}" "${WORK}/val-resp.json" "${WORK}/hdr-val.txt")"
+        if [ "${code}" = "409" ] && [ "$(json_get "${WORK}/val-resp.json" error)" = "busy" ]; then
+            skip "${label}: validation not exercised -- §7.2 busy (external engine); CI runs this check alone"
+            return 0
+        fi
         expect_eq "${label}: POST /api/run -> 400" "400" "${code}"
         expect_eq "${label}: error code validation_failed" "validation_failed" "$(json_get "${WORK}/val-resp.json" error)"
         if grep -qiE '^cache-control:[[:space:]]*no-store' "${WORK}/hdr-val.txt"; then
@@ -941,6 +985,7 @@ PY
         -d 'not json' -o "${WORK}/textplain.json" -w '%{http_code}' "$(api_url run)")"
     case "${code}" in
         400|415|403) pass "POST /api/run with text/plain is refused (HTTP ${code})" ;;
+        409) skip "text/plain refusal not exercised -- §7.2 busy (external engine)" ;;
         *) fail "POST /api/run with text/plain returned ${code}, expected 4xx" ;;
     esac
 
@@ -1096,6 +1141,13 @@ print("true" if "--samples_tsv" in a else "false")' "${WORK}/state.json")"
     expect_eq "run.finished_at is set" "true" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("true" if (d.get("run") or {}).get("finished_at") else "false")' "${WORK}/state.json")"
     if [ -n "$(state_field run.elapsed_seconds)" ]; then pass "run.elapsed_seconds is set"; else fail "run.elapsed_seconds is missing"; fi
     expect_eq "run.report.url is /api/report" "/api/report" "$(state_field run.report.url)"
+    expect_eq "default fake shape: tasks.completed == tasks.submitted (stdout Completed lines)" \
+        "$(state_field run.tasks.submitted)" "$(state_field run.tasks.completed)"
+    if grep -qF 'Completed process >' "$(state_field run.log)"; then
+        pass "default fake shape: run.log carries 'Completed process >' lines"
+    else
+        fail "default fake shape: run.log lost its Completed process lines"
+    fi
 
     local rpath
     rpath="$(state_field run.report.path)"
@@ -1188,6 +1240,85 @@ PY
     else
         fail "SSE from=<offset> text differs from the run.log tail"
     fi
+}
+
+# ===========================================================================
+# 4b. F48: real engines print only Submitted on stdout; completion is a
+#     `Task completed > TaskHandler[...]` DEBUG line in <project>/.nextflow.log.
+#     The fake's default mode prints Completed itself, which is why this bug
+#     survived; this scenario uses the real shape (engine_log=true) and asserts
+#     the ladder/task counts come from the log.
+# ===========================================================================
+phase_engine_log_run() {
+    banner "engine log: completion parsed from .nextflow.log, not stdout (F48)"
+    local P="${P_FAKE}"
+    local body="${WORK}/body-engine-log.json" code logf rpath mismatch spec
+    mk_body "${body}" fresh 0 "" \
+        "SR-A" "${P}/data/raw/a_1.fastq.gz" "${P}/data/raw/a_2.fastq.gz" "Escherichia coli" "K-12" "${P}/data/reference/ref.fasta" \
+        "SR-B" "${P}/data/raw/b_1.fastq.gz" "${P}/data/raw/b_2.fastq.gz" "" "" ""
+
+    # A fresh run must not inherit completions from an earlier run: the fake
+    # rotates .nextflow.log (new inode), which is what real nextflow does too.
+    rm -rf "${P}/results" "${P}/.nextflow.log" "${P}/.nextflow.log.1"
+    echo '{"mode": "success", "delay": 0.02, "engine_log": true,
+           "report_html": "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>ENGINE LOG REPORT</title></head><body><p>sentinel:FAKE_ENGINE_LOG_REPORT</p></body></html>",
+           "results_files": {"results/assembly/SR-A/contigs.fasta": ">contig_1\nACGTACGT\n"}}' \
+        > "${CTRL}"
+
+    code="$(post_run_retrying_busy "${body}" "${WORK}/run-engine-log-response.json")"
+    if ! run_accepted_or_skip "engine_log run" "${code}" "${WORK}/run-engine-log-response.json"; then
+        return 0
+    fi
+    if wait_run_state_t 120 done failed; then pass "engine_log run reaches a terminal state"; else fail "engine_log run never reached a terminal state"; fi
+    expect_eq "engine_log run state is done" "done" "$(state_field run.state)"
+    expect_eq "engine_log run exit_code is 0" "0" "$(state_field run.exit_code)"
+    logf="$(state_field run.log)"
+
+    # The fixture shape: 2 samples x 11 + 1 reference + growth + MultiQC = 25.
+    expect_eq "engine_log: tasks.submitted == 25 (from stdout Submitted lines)" "25" "$(state_field run.tasks.submitted)"
+    expect_eq "engine_log: tasks.completed == 25 (from .nextflow.log TaskHandler lines)" "25" "$(state_field run.tasks.completed)"
+    expect_eq "engine_log: tasks.expected == 25" "25" "$(state_field run.tasks.expected)"
+    expect_eq "engine_log: tasks.failed == 0" "0" "$(state_field run.tasks.failed)"
+    expect_eq "engine_log: run.log has NO 'Completed process >' line (real-engine shape)" \
+        "0" "$(grep -c 'Completed process >' "${logf}" 2>/dev/null || true)"
+    expect_file "engine_log: engine wrote <project>/.nextflow.log" "${P}/.nextflow.log"
+    expect_eq "engine_log: .nextflow.log has one TaskHandler line per task" \
+        "25" "$(grep -c 'Task completed > TaskHandler' "${P}/.nextflow.log" 2>/dev/null || true)"
+
+    # Per-process ladder: every step fully complete, and the counts are the
+    # contract's expected numbers, not just "submitted == expected".
+    mismatch="$(python3 - "${WORK}/state.json" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    data = {}
+run = data.get("run") or {}
+bad = []
+for step in run.get("steps") or []:
+    if step.get("completed") != step.get("expected"):
+        bad.append("%s:%s/%s" % (step.get("process"), step.get("completed"), step.get("expected")))
+print(",".join(bad))
+PY
+)"
+    expect_empty "engine_log: every ladder step completed == expected" "${mismatch}"
+    for spec in "FASTQC_RAW 4" "TRIMMOMATIC 2" "SPADES 2" "MULTIQC 1" "ASSEMBLY_REF 1" "GROWTH_CHECK 1"; do
+        set -- ${spec}
+        expect_eq "engine_log: ${1} completed == ${2}" "${2}" "$(step_field "${1}" completed)"
+    done
+    expect_eq "engine_log: FASTQC_RAW by_sample SR-A == 2" "2" "$(step_by_sample FASTQC_RAW SR-A)"
+    expect_eq "engine_log: FASTQC_RAW by_sample SR-B == 2" "2" "$(step_by_sample FASTQC_RAW SR-B)"
+    expect_eq "engine_log: SPADES by_sample SR-B == 1" "1" "$(step_by_sample SPADES SR-B)"
+
+    # `done` must still require a real report, not just "all Submitted".
+    expect_eq "engine_log: run.report.url is /api/report" "/api/report" "$(state_field run.report.url)"
+    rpath="$(state_field run.report.path)"
+    if [ -n "${rpath}" ] && [ -f "${rpath}" ] && grep -qF 'sentinel:FAKE_ENGINE_LOG_REPORT' "${rpath}"; then
+        pass "engine_log: done report is the new report written by this run"
+    else
+        fail "engine_log: done report is missing or stale: '${rpath}'"
+    fi
+    expect_eq "engine_log: run.failed is null" "" "$(state_field run.failed)"
 }
 
 # ===========================================================================
@@ -1573,6 +1704,10 @@ phase_real_stub() {
     expect_eq "real stub task count is 25 (2 samples x 11 + growth + MultiQC + 1 ref)" "25" "$(state_field run.tasks.submitted)"
     expect_eq "real stub expected task count is 25 (11*N + refs + 2)" "25" "$(state_field run.tasks.expected)"
     expect_eq "real stub has no failed task" "0" "$(state_field run.tasks.failed)"
+    expect_eq "real stub completed task count is 25 (parsed from .nextflow.log, F48)" \
+        "25" "$(state_field run.tasks.completed)"
+    expect_eq "real stub tasks.completed == tasks.submitted" \
+        "$(state_field run.tasks.submitted)" "$(state_field run.tasks.completed)"
 
     local steps
     steps="$(python3 - "${WORK}/state.json" <<'PY'
@@ -1768,6 +1903,7 @@ phase_startup_auth_preflight || true
 phase_validation || true
 phase_single_instance || true
 phase_success_run || true
+phase_engine_log_run || true
 phase_failed_run || true
 phase_noreport_run || true
 phase_cancel_run || true
