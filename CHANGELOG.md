@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The manual now states the machine the numbers came from.** Timings, the byte-identity checks and
+  the macOS/arm64 pins in `envs/*.yaml` are properties of the host, so `README.md` gains a
+  `## Development environment` section: MacBook Air `Mac14,2`, Apple M2 (8 CPU cores: 4P+4E,
+  10-core GPU), 8 GB unified memory, macOS 15.6 (build 24G84), 512 GB SSD (460 GiB formatted) with **26 GiB free**
+  measured 2026-10-24, `/bin/bash` 3.2.57, and the toolchain (Nextflow 26.10.0 build
+  14055, conda 26.7.3 + mamba 2.5.0, OpenJDK 25.0.2 Zulu `aarch64`, git 2.53.0, Python 3.14.6) —
+  plus the three consequences: why four environments are pinned, why 8 GB explains the 77.5-minute
+  acceptance run against a 38-minute idle baseline, and why the test suite is bash-3.2 compatible
+  and looks `nextflow` up instead of trusting a non-interactive `PATH` (D29).
+- **Containerisation is on the roadmap.** `docs/roadmap.md` gains section D: Docker/Singularity as an
+  opt-in profile (`-profile docker` / `-profile apptainer`, default off, conda unchanged), images
+  built from the existing `envs/*.yaml` so the byte-identity baseline has a chance to hold, reference
+  databases bind-mounted rather than baked in, a five-point acceptance (single-sample comparison
+  against the 0.1.0 baseline, two-sample full run, and one run on a conda-free Linux host) and the
+  costs recorded up front. Not implemented in this release (D30).
+
 ### Fixed
 
 - **The UI check no longer depends on which host it lands on.** Its two real-engine legs (the stub
