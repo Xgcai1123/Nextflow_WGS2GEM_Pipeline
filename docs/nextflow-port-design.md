@@ -35,7 +35,7 @@ FastQC → Trimmomatic → FastQC → SPAdes → QUAST → BUSCO → Bakta → C
 
 **非目标（明确不做）：**
 - 不重推导 macOS/arm64 环境 workaround（BUSCO 5.8.3 / QUAST pip / SPAdes 4.0.0 / pyhmmer 0.10.15 pin）——随 env yaml 原样迁移；
-- 不引入 Docker/Singularity（后续可作为独立 profile 追加）；
+- 本版不引入 Docker/Singularity（conda 是唯一后端）；容器化已列入未来路线图（`docs/roadmap.md` D 段，决策 **D30**）；
 - 不改线程数字（**决策 D2**：保持原声明——`carveme` 声明 4 实际单线程、`spades` 声明 8 等一律原样）；
 - 不改 `multiqc_config.yaml`、`multiqc_extras.py`、`memote_report.py` 的功能（`multiqc_extras.py` 对 benchmark 目录的读取契约保持不变，见 §10）；
 - 不迁移 `raw/`、`db/` 数据（默认以参数指回原仓库，见 §3、§5）。
@@ -1305,6 +1305,8 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | D26 | 本地 UI 的形态:**单进程 python3 标准库 HTTP 服务 + 原生 JS 单页**(无框架/无构建/无 CDN),只绑 `127.0.0.1`、一次一个任务、不提供上传、不自己删任何东西、不复刻报告;进度与报告路径只从引擎输出读取(`Submitted|Completed process` 行、`onComplete` 的 `report =` 行),**exit 0 但没有报告判 failed**;取消打整个进程组(SIGTERM→10 s→SIGKILL)并保留 `work/`,重启后 attach 的运行同样可取消;鉴权=一次性 token + Origin 校验。理由:用户已定"本地单用户 Web UI"且要求零依赖、与现有 CI 工具无关;Electron 多一套打包链,FastAPI+React 引入 pip/npm,均与"同事拿到就能跑、CI 只认 bash+python3"冲突。代价:手写 CSS/JS、无组件库(2026-10-23,roadmap C) | 已定(2026-10-23) |
 | D27 | 本地 UI 的**语言 = 英文**(界面 + API 用户可见文案);DOM id / `data-*` 不变,断言平移。理由:用户 2026-10-24 明确要求英文(首版按用户当时的选择做了中文,现在改);README 与报告本就是英文,对外演示/同事使用一致。代价:后端约 140 处文案重写,且中文用户需习惯英文界面(未做双语切换,如将来要,需 API 携带 lang 参数) | 已定(2026-10-24,用户要求) |
 | D28 | 进度呈现 = **总进度条 + 12 阶段阶梯 + 四个计数**三者并存:进度条给整体百分比(completed/expected,clamp 0–100,终态强制 100/标红失败阶段)与当前阶段,阶梯给每一步的样本×process 明细,计数给绝对值。刷新不依赖单通道:SSE state 事件带进度摘要(任务数变化即推送)、可见时 5 s 轮询、focus/visibility 立即刷新、终态 600 ms 二次拉取、45 s 看门狗重连。理由:用户反馈"进度不直观"与"任务结束后运行模块不更新";前者是表达问题,后者是 SSE 只在状态名变化时推送导致的冻结(F51) | 已定(2026-10-24,用户反馈) |
+| D29 | **手册必须写明开发/验收主机**：README 增加 `## Development environment` 段（MacBook Air `Mac14,2`、Apple M2 8 核(4P+4E)/10 核 GPU、8 GB 统一内存、macOS 15.6 build 24G84、512 GB SSD(460 GiB 可用)剩 26 GiB、`/bin/bash` 3.2.57、Nextflow 26.10.0 build 14055、conda 26.7.3 + mamba 2.5.0、OpenJDK 25.0.2 Zulu `aarch64`、Python 3.14.6），并写明三条推论：arm64 是 `envs/*.yaml` 四处 pin 的来源；8 GB 是「77.5 min 验收 vs 38 min 空载」的来源；测试按 bash 3.2 写且不信任非交互 `PATH`。理由：计时、字节一致、环境 workaround 全是**主机属性**（F42/F49/F52），没有主机信息的数字不可复核 | 已定（2026-10-24，用户要求） |
+| D30 | **容器化列入未来路线图，本版仍 conda-only**：见 `docs/roadmap.md` D 段——镜像由现有 `envs/*.yaml` 构建、`container` 指令 + 独立 `containers.config`、`-profile docker`/`apptainer` 默认关闭、参考数据库 bind mount 不进镜像、验收必须重跑 0.1.0 基线并在**无 conda 的 Linux 主机**上跑通。理由：用户 2026-10-24 明确「未来路线应包含容器化」；当前交付的可复现单位只是包版本，不是整个运行环境。实施未开始 | 已定（2026-10-24，用户指示） |
 
 ## 17. 里程碑与后续开放问题
 
@@ -1318,12 +1320,13 @@ lint（error 门禁 + 告警棘轮）、`-preview` 编译 + 6 个坏样本表（
 | 5 | 全量对拍（阶段 B/C）+ 回写文档 + readme 补充 Nextflow 运行说明 | 对拍表全部通过 |
 | 6 | 防御性加固：磁盘硬预检（F22/D13）+ 每次 push 的 CI 回归守卫（阶段 D/D14）+ 单样本失败注入实测（F23/D12） | ✅ **完成（2026-10-14）**：预检三分支实测（满足/不满足/关闭）且不满足时在任何任务前中止；CI 3 个 job 全绿（lint 0 error + 告警棘轮、`-preview` + 6 坏样本表、F22 三分支、23 任务 stub 干跑 + 产物契约 + 根产物零改写、F23 注入失败 + `-resume` 收敛 + `ignore` 负对照）；单样本失败从"未验证限制"变为"实测语义"，并更正了 `finish` ≠ `--keep-going` 的旧表述。**（更正 2026-10-15：本行原称"CI 3 个 job 全绿"，但该仓库当时从未跑过 workflow——那是本地脚本的结论，而本地绿 ≠ CI 绿；首次真实 CI 运行 3/4 job 红，根因与对策见 F28/D18。CI 现为 4 个 job。）** |
 
-| 7 | 本地一键 UI(roadmap C):契约 + 假引擎 → 后端/前端/测试 → 真实 2 样本验收 | ✅ **完成(2026-10-24,0.3.0 更新)**:318 条断言 0 FAIL/0 SKIP(39 s,CI job `local-ui`;含英文界面、总进度条、刷新兜底);真实 stub 全 DAG 25 任务;注入失败定位 `FASTQC_RAW/CI_B_1/exit 1`;真实 2 样本经 UI 从清空跑到报告:**26/26、exit 0、77.5 min**、报告逐字节转发并在 iframe 渲染、350 MiB 下载 69/69 一致、全部数字与 0.1.0 基线相同;真实运行中的取消与 kill -9 后 attach 均实测。⏳ **≤45 min 未达成**(主机 8 GiB RAM/loadavg 峰值 24.1,非 UI/管线开销),作为待复测项保留(F49;复测方法见 `docs/ui.md` §14) |
+| 7 | 本地一键 UI(roadmap C):契约 + 假引擎 → 后端/前端/测试 → 真实 2 样本验收 | ✅ **完成(2026-10-24,0.3.0 更新)**:318 条断言 0 FAIL/0 SKIP(39 s,CI job `local-ui`;含英文界面、总进度条、刷新兜底);真实 stub 全 DAG 25 任务;注入失败定位 `FASTQC_RAW/CI_B_1/exit 1`;真实 2 样本经 UI 从清空跑到报告:**26/26、exit 0、77.5 min**、报告逐字节转发并在 iframe 渲染、350 MiB 下载 69/69 一致、全部数字与 0.1.0 基线相同;真实运行中的取消与 kill -9 后 attach 均实测。⏳ **≤45 min 未达成**(主机 8 GiB RAM/loadavg 峰值 24.1,非 UI/管线开销),作为待复测项保留(F49;复测方法见 `docs/ui.md` §14);F52 后 gate 为 319 条 |
+| 8 | 容器化(roadmap D):镜像构建 + `-profile docker`/`apptainer` + 基线重跑 | ⏳ **未开工**(2026-10-24 立项,D30);验收口径见 `docs/roadmap.md` D 段 |
 
 **开放问题：**
 1. 复用资产副本的同步机制：手动同步（记录来源 commit）还是 git submodule？（实施时定）
 2. `raw/`、`db/` 后续是否复制/迁移进新仓库，还是长期以 `../WGSpipeline` 引用？（用户定）
-3. 是否在里程碑 5 后追加 Docker/Singularity profile？（可选）
+3. ~~是否追加 Docker/Singularity profile？~~ **已定 2026-10-24（用户指示）**：列入未来路线图`docs/roadmap.md` D 段，本版仍 conda-only（D30）；实施未开始。
 4. `samples.tsv` 的新仓库副本与原仓库如何保持同步（两份表并存期间的分歧风险）？
 
 ## 18. 收尾审查结论（逻辑 / 生物学准确性 / 易用性，2026-10-14）

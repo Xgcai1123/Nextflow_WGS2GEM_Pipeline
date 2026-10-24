@@ -52,6 +52,44 @@ four-minute quality suite (F29).
 - Reference databases (Bakta light DB, BUSCO lineage cache) are referenced via parameters and
   are **not** stored in this repository
 
+## Development environment
+
+Every number in this README — the ~38-minute two-sample runtime, the byte-identity checks against
+the Snakemake original, the BUSCO/MEMOTE scores — was measured on **one** machine. That matters
+because wall time is a property of the host, not of the pipeline (the same DAG took 17× longer on a
+contended host, see *Performance*), and because macOS/arm64 is the reason four of the eight
+environments carry a pin or a workaround. The host is therefore part of the result:
+
+| Item | Value |
+|---|---|
+| Machine | MacBook Air, model identifier `Mac14,2` (`MLY23LL/A`) |
+| Chip | Apple M2 — 8 CPU cores (4 performance + 4 efficiency), 10-core GPU, 16-core Neural Engine |
+| Architecture | `arm64` (Apple Silicon); nothing ran under Rosetta (`sysctl.proc_translated = 0`), and the JDK is `aarch64` |
+| Memory | **8 GB** unified memory — the binding constraint behind every timing claim |
+| Operating system | macOS 15.6 (build `24G84`, "Sequoia") |
+| Storage | 512 GB SSD (460 GiB formatted), **26 GiB free** measured 2026-10-24 (`work/` alone churns ~1.5 GB of scratch per run) |
+| Shell | `zsh` interactively; `/bin/bash` **3.2.57** (the version macOS ships) for every script in this repository |
+| Toolchain | Nextflow **26.10.0** (build 14055) · conda 26.7.3 + mamba 2.5.0 · OpenJDK 25.0.2 (Zulu, `aarch64`) · git 2.53.0 · Python 3.14.6 (miniforge base; only the web UI needs Python) |
+| Package sources | `envs/*.yaml` as shipped (bioconda → conda-forge → defaults); the eight environments are built into `.nextflow/conda` |
+| Reference data | outside the repository, passed by parameter (Bakta light DB, BUSCO `enterobacterales_odb10` lineage, AMR guard cache) |
+
+Three consequences are stated up front so that the numbers can be read correctly:
+
+1. **arm64 macOS is why the environments are pinned.** Four of the eight `envs/*.yaml` are not the
+   upstream originals on this platform: BUSCO 5.8.3, QUAST installed through pip (its bundled
+   minimap2 does not compile for `arm64-apple-darwin`), SPAdes 4.0.0, and the `pyhmmer` 0.10.15
+   pin. They are carried verbatim from the Snakemake original, not re-derived here.
+2. **8 GB is tight.** A full two-sample run swaps (3.3–4.8 GiB), and the acceptance run took
+   **77.5 min** against the 38 min measured on the same machine when idle — the pipeline is
+   unchanged between those two numbers. On a roomier Linux host `-profile lowmem` is unnecessary.
+3. **The test suite assumes nothing beyond this machine.** `tests/ci/*.sh` are bash-3.2 compatible,
+   avoid GNU-only flags, and look up `nextflow` instead of assuming it is on a non-interactive
+   `PATH` (it lives in `~/miniforge3/envs/nextflow/bin`).
+
+Containerisation (Docker/Singularity) is **not** part of this release — conda is the only
+execution backend. It is the next planned step, scoped in the roadmap (`docs/roadmap.md`,
+section D).
+
 ## Quick start
 
 ```bash
